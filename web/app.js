@@ -195,7 +195,7 @@ function sidebarTime(ts) {
 /* ---------- sidebar ---------- */
 function previewOf(t) {
   const m = t.last;
-  if (!m) return t.agent ? esc(S.agents[t.agent]?.blurb || "No messages yet") : "Everyone, together";
+  if (!m) return t.agent ? esc(S.agents[t.agent]?.blurb || "No messages yet") : "The agent, and any profile you @mention";
   let text = m.text.replace(/\s+/g, " ").slice(0, 90);
   // a bare NO_REPLY from older history says nothing worth previewing
   if (/^\W*no[_ ]?reply\W*$/i.test(text)) return t.agent ? esc(S.agents[t.agent]?.blurb || "") : "";
@@ -505,8 +505,8 @@ function renderMessages(keep) {
   if (!msgs.length && !S.hasMore) {
     const a = t.agent ? S.agents[t.agent] : null;
     html = `<div class="empty">${a ? faceSVG(a, 56, "happy") : teamTile(56)}
-      <strong>${esc(a ? a.name : "The whole team")}</strong>
-      <span>${esc(a ? (a.blurb || "Ready when you are.") : "Messages here reach your lead, or whoever you @mention.")}</span></div>`;
+      <strong>${esc(a ? a.name : "Group chat")}</strong>
+      <span>${esc(a ? (a.blurb || "Ready when you are.") : "Messages here reach the agent, or any profile you @mention.")}</span></div>`;
   }
   const sc = $("#scroll");
   const before = { h: sc.scrollHeight, top: sc.scrollTop };
@@ -585,7 +585,7 @@ async function openThread(id, atId = null) {
   $("#edit-agent-btn").classList.toggle("hidden", t.kind !== "dm");
   $("#header-badge").classList.toggle(
     "hidden", !(t.kind === "dm" && t.agent === S.imessageAgent && S.imessageEnabled));
-  $("#input").placeholder = t.kind === "dm" ? `Message ${t.name}` : "Message the team, or @mention someone";
+  $("#input").placeholder = t.kind === "dm" ? `Message ${t.name}` : "Message the agent, or @mention a profile";
   window.dispatchEvent(new CustomEvent("mc:thread", { detail: t }));
   S.anchorId = atId;
   S.loadingOlder = false;
@@ -644,7 +644,7 @@ function openModal() {
   naMode = "new"; naEditId = null;
   $("#na-policy").classList.add("hidden");
   $("#modal-backdrop").classList.remove("hidden");
-  $("#new-agent-modal h2").textContent = "New agent";
+  $("#new-agent-modal h2").textContent = "New profile";
   $("#na-create").textContent = "Create";
   $("#na-remove").classList.add("hidden");
   $("#na-error").textContent = "";
@@ -666,11 +666,11 @@ function openEditModal(aid) {
   $("#na-tools").value = a.tools === null || a.tools === undefined ? "" : a.tools.join(", ") || "none";
   $("#na-skills").value = a.skills === null || a.skills === undefined ? "" : a.skills.join(", ") || "none";
   $("#modal-backdrop").classList.remove("hidden");
-  $("#new-agent-modal h2").textContent = "Edit agent";
+  $("#new-agent-modal h2").textContent = "Edit profile";
   $("#na-create").textContent = "Save";
   const rm = $("#na-remove");
   rm.classList.remove("hidden", "confirm");
-  rm.textContent = "Remove agent";
+  rm.textContent = "Remove profile";
   $("#na-error").textContent = "";
   naColor = a.color;
   renderSwatches(); naPreview();
@@ -686,8 +686,8 @@ async function fillModelPicker(override) {
   const sel = $("#na-provider"), input = $("#na-model");
   const full = SET.full || await fetchFull().catch(() => null);
   const presets = (full && full.llm && full.llm.presets) || {};
-  const teamModel = (full && full.llm && full.llm.model) || "the team model";
-  sel.innerHTML = `<option value="">Team default (${esc(teamModel)})</option>` +
+  const teamModel = (full && full.llm && full.llm.model) || "the default model";
+  sel.innerHTML = `<option value="">Default (${esc(teamModel)})</option>` +
     Object.entries(presets)
       .map(([k, p]) => `<option value="${esc(k)}">${esc(p.label)}</option>`).join("");
   sel.value = (override && override.provider) || "";
@@ -701,7 +701,7 @@ function syncModelPicker() {
   const full = SET.full, presets = (full && full.llm && full.llm.presets) || {};
   const preset = presets[sel.value];
   input.disabled = !sel.value;
-  input.placeholder = sel.value ? "model" : "uses the team model";
+  input.placeholder = sel.value ? "model" : "uses the default model";
   if (!sel.value) {
     hint.className = "na-hint";
     hint.textContent = "";
@@ -712,7 +712,7 @@ function syncModelPicker() {
   hint.className = needsKey ? "na-hint warn" : "na-hint";
   hint.textContent = needsKey
     ? `${preset.label} needs ${preset.key_env} in Settings > Model before this agent can use it.`
-    : "This agent thinks with this model; the rest of the team is unaffected.";
+    : "This profile thinks with this model; the others are unaffected.";
 }
 
 function setImsgCheckbox(checked, locked) {
@@ -739,7 +739,7 @@ async function submitModal() {
     const payload = { name, prompt, color: naColor, cwd: $("#na-cwd").value.trim() || "~",
                       llm: provider ? { provider, model: $("#na-model").value.trim() } : {} };
     if (provider && !payload.llm.model) {
-      $("#na-error").textContent = "Pick a model for that provider, or go back to the team default.";
+      $("#na-error").textContent = "Pick a model for that provider, or go back to the default.";
       return;
     }
     let res, data, aid;
@@ -1166,7 +1166,7 @@ const CHANNEL_META = {
   },
   email: {
     label: "Email", icon: "&#9993;&#65039;",
-    hint: "A dedicated address the team owns. Use an app password; unseen mail from allowed senders routes to the agent, replies go back on the same thread.",
+    hint: "A dedicated address the agent owns. Use an app password; unseen mail from allowed senders routes to the agent, replies go back on the same thread.",
     fields: [["address", "Email address"], ["imap_host", "IMAP host"], ["smtp_host", "SMTP host"]],
     secret: "App password",
     senders: "Email addresses allowed to write in",
@@ -1713,7 +1713,7 @@ async function welSaveName() {
 
 function welDone() {
   welSaveName();
-  setStatus("#wel-status", "Connected. Your team is saying hello.", "ok");
+  setStatus("#wel-status", "Connected. Your agent is saying hello.", "ok");
   setTimeout(() => $("#welcome-backdrop").classList.add("hidden"), 900);
   fetchFull();
   const lead = [...S.threads].find((t) => t.kind === "dm");
@@ -2076,7 +2076,7 @@ async function renderJobsPane() {
   const pending = d.jobs.filter((j) => j.status === "pending").length;
   updateJobsBadge(pending);
   if (!d.jobs.length) {
-    wrap.innerHTML = `<div class="set-hint">No scheduled jobs yet. Ask an agent to schedule something, e.g. "check the error logs every morning at 9".</div>`;
+    wrap.innerHTML = `<div class="set-hint">No scheduled jobs yet. Ask it to schedule something, e.g. "check the error logs every morning at 9".</div>`;
     await renderWatchesInto(wrap, d.agents);
     updateJobsBadge(pending + await renderApprovalsInto(wrap, d.agents));
     return;
@@ -2414,7 +2414,7 @@ async function previewVoice() {
   if (!(await saveVoice())) return;
   const d = await (await fetch("/api/tts", { method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: "Mission Control online. Your team is standing by." }) })).json();
+    body: JSON.stringify({ text: "Mission Control online. Standing by." }) })).json();
   if (!d.ok) { setStatus("#voice-status-set", `Error: ${d.error}`, "err"); return; }
   new Audio(d.url).play().catch(() => {});
   setStatus("#voice-status-set", "", "");
@@ -2607,7 +2607,7 @@ async function renderImprovements() {
 
   $("#improve-list").innerHTML = S.improvements.length ? S.improvements.map((i) => {
     const auto = i.agent === "selfimprove";
-    const status = auto && i.status === "pending" && autoApply ? "lands when the team is idle" : (IMP_STATUS[i.status] || i.status);
+    const status = auto && i.status === "pending" && autoApply ? "lands when nothing is running" : (IMP_STATUS[i.status] || i.status);
     return `
     <div class="mem-row imp-row" data-id="${i.id}">
       <div class="mem-head"><span class="mem-kind">${esc(status)}</span>

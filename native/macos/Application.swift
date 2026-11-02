@@ -119,7 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTo
         let agents = model.snapshot?.harness.agents ?? []
         let active = agents.filter { !["idle", "error", "offline"].contains($0.state) }.count
         runtimeItem?.title = "Runtime: \(model.status.lowercased())"
-        teamItem?.title = "\(active) active agents · \(model.processes.count) processes"
+        teamItem?.title = "\(active) working · \(model.processes.count) processes"
         statusLabel?.stringValue = "\(model.status == "Running" ? "●" : "◌") \(model.status) · \(active) active"
         statusLabel?.sizeToFit()
         statusItem?.button?.image = NSImage(systemSymbolName: active > 0 ? "waveform.path.ecg.rectangle.fill" : "waveform.path.ecg", accessibilityDescription: "Mission Control · \(model.status)")

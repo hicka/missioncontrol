@@ -929,7 +929,7 @@ def _can_spend() -> str | None:
     if not llm.ready():
         return "no model is configured"
     if budget.status().get("exceeded"):
-        return "the team's daily budget is spent"
+        return "the daily budget is spent"
     if _calls_today() >= DAILY_CALLS:
         return f"already made {DAILY_CALLS} learning calls today"
     if time.time() < _cool_until:
@@ -1009,7 +1009,7 @@ async def distill_feedback(orch, now: float | None = None) -> list[dict]:
     added = []
     for agent, items in list(by_agent.items())[:3]:
         if agent not in orch.agents:
-            _set_feedback([f["id"] for f in items], "skipped", "agent no longer on the team")
+            _set_feedback([f["id"] for f in items], "skipped", "that profile no longer exists")
             continue
         # Mid-conversation, the next message often finishes the thought.
         if now - items[-1]["ts"] < SETTLE or orch.agent_state.get(agent) in ("thinking", "doing"):

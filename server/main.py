@@ -371,7 +371,7 @@ def configure_runtime():
     manager.add("fleet_listener", "Fleet listener", "Key-authenticated connections from your other machines.",
                 run=_serve_fleet, default=lambda: bool(sync_mod.sync_key()),
                 dependencies=("agents",), group="network", settings_tab="github")
-    manager.add("fleet_sync", "Fleet synchronization", "Shares configured team knowledge with paired machines.",
+    manager.add("fleet_sync", "Fleet synchronization", "Shares memory, skills and playbooks with paired machines.",
                 run=lambda: sync_mod.loop(orch), default=sync_mod.enabled,
                 dependencies=("fleet_listener",), group="network", settings_tab="github")
     return manager
@@ -510,7 +510,7 @@ async def state():
                         "name": a["name"], "last": last})
     last_group = await asyncio.to_thread(db.last_message, "group:team")
     threads.append({"id": "group:team", "kind": "group", "agent": None,
-                    "name": "Team", "last": last_group,
+                    "name": "Group chat", "last": last_group,
                     "members": [a["id"] for a in agents]})
     return {"user": orch.user, "agents": agents, "threads": threads}
 
@@ -2101,7 +2101,7 @@ class LLMBody(BaseModel):
 SETUP_GREETING = (
     "The owner just plugged a model into Mission Control and is looking at the app "
     "for the first time. Say hello in two or three short, warm sentences: who you are, "
-    "who else is on the team and what each one is for (by role, in a sentence), and "
+    "what you can take on for them and the roles your tasks can run as (in a sentence), and "
     "ask what they would like help with first. No lists, no markdown. Say it with the reply tool."
 )
 

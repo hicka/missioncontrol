@@ -41,7 +41,7 @@
       <div class="set-row-note">${escape(tab.agent === 'owner' ? 'Your login tab' : names[tab.agent] || tab.agent)} · ${escape(tab.url)}</div>
       <div class="set-row"><button class="btn" data-browser-session="${escape(tab.id)}" data-action="focus" ${data.headless || busy ? 'disabled' : ''}>Show tab</button>
       <button class="btn" data-browser-session="${escape(tab.id)}" data-action="close" ${busy ? 'disabled' : ''}>Close tab</button></div>
-      </div>`).join('') || '<div class="set-hint">No open tabs. Open the browser to sign in, or give an agent a website task.</div>';
+      </div>`).join('') || '<div class="set-hint">No open tabs. Open the browser to sign in, or give the agent a website task.</div>';
     // Preserve buttons and keyboard focus when the live snapshot is unchanged.
     if (sessionHTML !== html) { $('#browser-sessions').innerHTML = html; sessionHTML = html; }
     $('#browser-agents').textContent = (data.agents || []).map(a => `${a.name}: ${a.allowed ? 'browser allowed' : 'browser restricted'}`).join(' · ');
@@ -53,7 +53,7 @@
       <strong>${escape(entry.label)}</strong><div class="set-row-note">${escape(entry.origin)}</div>
       <div class="set-row"><button class="btn" data-credential-edit="${escape(entry.id)}">Update login</button>
       <button class="btn" data-credential-delete="${escape(entry.id)}">Forget login</button></div></div>`).join('') ||
-      '<div class="set-hint">No saved logins yet. Add a website account below, or save it when an agent asks you to sign in.</div>';
+      '<div class="set-hint">No saved logins yet. Add a website account below, or save it when the agent asks you to sign in.</div>';
     if (html !== credentialHTML) { $('#browser-credentials').innerHTML = html; credentialHTML = html; }
   }
   function renderRequests(requests, names) {
@@ -181,7 +181,7 @@
   $('#browser-open-form').addEventListener('submit', event => {
     event.preventDefault();
     act('browser/open', 'POST', {url: $('#browser-url').value.trim()},
-      'Opening your browser…', 'Browser opened. Sign in there, then give an agent your task in chat.');
+      'Opening your browser…', 'Browser opened. Sign in there, then give the agent your task in chat.');
   });
   $('#browser-sessions').addEventListener('click', event => {
     const button = event.target.closest('[data-browser-session]');

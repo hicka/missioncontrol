@@ -31,7 +31,7 @@ def run(orch, thread, text):
 def test_model_shows_the_team_default(orch):
     aid = next(iter(orch.agents))
     res = run(orch, f"dm:{aid}", "/model")
-    assert "deepseek/deepseek-flash" in res["reply"] and "team default" in res["reply"]
+    assert "deepseek/deepseek-flash" in res["reply"] and "default" in res["reply"]
 
 
 def test_effort_sets_an_override_and_reset_clears_it(orch):
@@ -41,7 +41,7 @@ def test_effort_sets_an_override_and_reset_clears_it(orch):
     assert orch.agents[aid]["llm"] == {"effort": "high"}
     assert llm._resolved(orch.agent_llm(aid))["effort"] == "high"
     res = run(orch, f"dm:{aid}", "/effort reset")
-    assert "at low effort (team default)" in res["reply"]
+    assert "at low effort (default)" in res["reply"]
     assert orch.agents[aid]["llm"] == {}
 
 

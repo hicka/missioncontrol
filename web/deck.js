@@ -18,7 +18,7 @@
   };
   let refreshTimer, panelTimer, restoreFocus;
   const now = () => Date.now() / 1000;
-  const agentName = (id) => S.agents[id]?.name || ({ "*": "Whole team", selfimprove: "Self-repair" }[id] || id) || "Someone";
+  const agentName = (id) => S.agents[id]?.name || ({ "*": "Everywhere", selfimprove: "Self-repair" }[id] || id) || "Someone";
   const firstName = () => ((S.user && S.user.name) || "").split(" ")[0];
   const lead = () => Object.values(S.agents).sort((a, b) => (a.order ?? 99) - (b.order ?? 99))[0];
   const openMissions = () => D.data.missions.filter((m) => ["running", "queued", "waiting"].includes(m.status));
@@ -177,7 +177,7 @@
         <h2 class="reveal">${h(greeting())}</h2>
         <div class="home-sub reveal" id="home-sub"></div>
         <div class="composer-lg reveal">
-          <textarea id="home-input" rows="2" placeholder="Give your team a task, or ask anything…" aria-label="New task"></textarea>
+          <textarea id="home-input" rows="2" placeholder="Hand over a task, or ask anything…" aria-label="New task"></textarea>
           <div class="composer-row">
             <span class="route-chip" id="home-route"></span>
             <span class="hint">Enter to send · @ to choose who · / for commands</span>
@@ -185,15 +185,15 @@
           </div>
         </div>
         <div class="suggestions reveal">
-          <button data-act="run-command" data-command="/status">${icon("users")}What is everyone doing?</button>
-          <button data-act="prefill" data-text="Summarize what the team got done today, and what is still open.">${icon("tasks")}Today's summary</button>
+          <button data-act="run-command" data-command="/status">${icon("users")}What is running?</button>
+          <button data-act="prefill" data-text="Summarize what got done today, and what is still open.">${icon("tasks")}Today's summary</button>
           <button data-act="show" data-view="knowledge" data-tab="skills">${icon("lightbulb")}Run a skill</button>
         </div>
         <div id="home-feedback"></div>
       </section>
       <section class="section" id="home-needs"></section>
       <section class="section">
-        <div class="section-head"><h3>Your team</h3><span class="count" id="home-team-count"></span></div>
+        <div class="section-head"><h3>Profiles</h3><span class="count" id="home-team-count"></span></div>
         <div class="team-grid" id="home-team"></div>
       </section>
       <div class="home-grid">
@@ -215,7 +215,13 @@
     const inbox = D.data.inbox || [];
     const evo = D.data.evolution || {};
     const bits = [];
-    bits.push(busy.length ? `<b>${plural(busy.length, "agent")}</b> working` : `${plural(Object.keys(S.agents).length, "agent")}, all quiet`);
+    // what the kernel says is open, so this can never read "all quiet" over a waiting task
+    const workers = D.data.workers || [];
+    const working = workers.filter((w) => w.status === "working").length;
+    const waiting = workers.filter((w) => WORKER_OPEN.includes(w.status)).length - working;
+    if (working) bits.push(`<b>${plural(working, "task")}</b> working`);
+    if (waiting) bits.push(working ? `<b>${waiting}</b> more open` : `<b>${plural(waiting, "task")}</b> open`);
+    if (!working && !waiting) bits.push("All quiet");
     if (inbox.length) bits.push(`<b>${inbox.length}</b> ${inbox.length === 1 ? "thing needs" : "things need"} you`);
     if (evo.week && evo.week.clean_rate !== null && evo.week.clean_rate !== undefined) bits.push(`<b>${pct(evo.week.clean_rate)}</b> clean runs this week`);
     $("#home-sub").innerHTML = bits.map((b) => `<span>${b}</span>`).join('<span class="sep">·</span>');
@@ -242,7 +248,7 @@
     const agents = Object.values(S.agents).sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
     $("#home-team-count").textContent = agents.length;
     $("#home-team").innerHTML = agents.map(agentCard).join("") +
-      `<button class="agent-card add" data-act="new-agent">${icon("plus")}<span>Add an agent</span></button>`;
+      `<button class="agent-card add" data-act="new-agent">${icon("plus")}<span>Add a profile</span></button>`;
     // in progress
     const open = openMissions();
     const running = (D.data.executions || []).filter((e) => e.status === "running" && e.kind === "tool" && !open.some((m) => m.id === e.mission));
@@ -253,7 +259,7 @@
       ...open.slice(0, 6).map(taskRow),
     ];
     $("#home-progress").innerHTML = rows.length ? `<div class="list card">${rows.join("")}</div>`
-      : `<div class="card"><div class="empty compact"><span>Nothing in flight. Give the team a task above and it shows up here.</span></div></div>`;
+      : `<div class="card"><div class="empty compact"><span>Nothing in flight. Hand over a task above and it shows up here.</span></div></div>`;
     $("#home-growth").innerHTML = growthCard(evo);
   }
   function toolDetail(e) {
@@ -282,7 +288,7 @@
     const stats = agentStats(a.id);
     return `<button class="agent-card ${st !== "idle" ? "busy" : ""}" style="--c:${colorOf(a)}" data-act="chat" data-agent="${h(a.id)}">
       <div class="agent-card-top">${faceSVG(a, 40, moodOf(a.id))}
-        <div style="min-width:0"><div class="name">${h(a.name)}</div><div class="role">${h(a.blurb || "Teammate")}</div></div></div>
+        <div style="min-width:0"><div class="name">${h(a.name)}</div><div class="role">${h(a.blurb || "A role tasks can run as")}</div></div></div>
       <div class="doing"><span class="status-dot ${h(st)}"></span><span>${h(doing || (last ? `Idle · last active ${ago(last)}` : "Idle"))}</span></div>
       <div class="stats"><span><b>${stats.active}</b>active</span><span><b>${stats.scheduled}</b>scheduled</span><span><b>${stats.done}</b>done</span></div>
     </button>`;
@@ -311,7 +317,7 @@
         <span><b style="color:var(--text)">${evo.trial || 0}</b> on trial</span>
         <span><b style="color:var(--text)">${w.corrections ?? 0}</b> corrections this week</span>
       </div>
-      ${latest ? `<div class="latest">${latest}</div>` : `<div class="latest"><div>${icon("spark")}<span>Lessons appear here as the team learns from your corrections and its own repeated mistakes.</span></div></div>`}
+      ${latest ? `<div class="latest">${latest}</div>` : `<div class="latest"><div>${icon("spark")}<span>Lessons appear here as it learns from your corrections and its own repeated mistakes.</span></div></div>`}
       ${evo.enabled ? "" : `<div class="muted" style="font-size:12px">Learning is paused. Turn it on from the Evolution page.</div>`}
     </div>`;
   }
@@ -411,7 +417,7 @@
   }
   function inboxItem(i) {
     const k = KIND[i.kind] || { icon: "inbox", tone: "", label: i.kind };
-    const who = i.agent && i.agent !== "*" ? agentName(i.agent) : (i.kind === "lesson" ? "Whole team" : "");
+    const who = i.agent && i.agent !== "*" ? agentName(i.agent) : (i.kind === "lesson" ? "Everywhere" : "");
     let sub = "", actions = "";
     if (i.kind === "command") {
       sub = `<span class="who">${h(who)}</span> wants to run this in ${h(i.detail)}. Running it runs exactly what is shown.${priorHtml(i.prior)}`;
@@ -467,7 +473,7 @@
     const items = D.data.inbox || [];
     $("#inbox-list").innerHTML = items.length ? `<div class="list card">${items.map(inboxItem).join("")}</div>`
       : `<div class="card"><div class="empty">${teamFaces("happy")}<strong>Nothing needs you</strong>
-          <span>When an agent needs your say-so, it lands here and on your phone.</span></div></div>`;
+          <span>When the agent needs your say-so, it lands here and on your phone.</span></div></div>`;
   }
   function teamFaces(state = "idle") {
     const agents = Object.values(S.agents).sort((a, b) => (a.order ?? 99) - (b.order ?? 99)).slice(0, 4);
@@ -483,7 +489,7 @@
       <div class="item-meta">${pill(m.status)}${resumable ? `<button class="btn small" data-act="resume" data-id="${h(m.id)}">Resume</button>` : ""}</div></div>`;
   }
   function tasksFrame() {
-    return `<div class="view-head"><div><h2>Tasks</h2><p>Every objective you have handed the team, who owns it, and where it stands.
+    return `<div class="view-head"><div><h2>Tasks</h2><p>Every objective you have handed over, what it runs as, and where it stands.
       Tasks survive restarts and wait for you to resume them.</p></div>
       <div class="view-actions"><button class="btn primary" data-act="new-task">${icon("plus")}New task</button></div></div>
       <div class="toolbar"><div class="tabs" id="task-tabs"></div></div><div id="task-list"></div>`;
@@ -670,7 +676,7 @@
         ${j.note ? `<div class="item-sub">Notes: ${h(j.note)}</div>` : ""}
         <div class="item-actions">${acts}</div></div>
         <div class="item-meta">${pill(j.status)}</div></div>`;
-    }).join("")}</div>` : `<div class="card"><div class="empty compact"><span>No scheduled jobs. Ask an agent to check something every morning, and approve it here.</span></div></div>`;
+    }).join("")}</div>` : `<div class="card"><div class="empty compact"><span>No scheduled jobs. Ask it to check something every morning, and approve it here.</span></div></div>`;
     const watches = [...(D.data.watches || [])].sort((a, b) => (a.status === "active" ? 0 : 1) - (b.status === "active" ? 0 : 1) || b.ts - a.ts).slice(0, 24);
     $("#watch-count").textContent = watches.filter((w) => w.status === "active").length || "";
     $("#watch-list").innerHTML = watches.length ? `<div class="list card">${watches.map((w) => `<div class="item">${faceSVG(S.agents[w.agent], 26)}
@@ -680,12 +686,12 @@
         ${w.last_out ? `<pre class="out" style="margin-top:8px;max-height:120px">${h(String(w.last_out).slice(0, 1200))}</pre>` : ""}
         ${w.status === "active" ? `<div class="item-actions"><button class="btn small ghost danger" data-act="cancel-watch" data-id="${w.id}">Stop watching</button></div>` : ""}</div>
       <div class="item-meta">${pill(w.status)}</div></div>`).join("")}</div>`
-      : `<div class="card"><div class="empty compact"><span>No watches. Agents arm one to follow a CI run, a deploy or a status page.</span></div></div>`;
+      : `<div class="card"><div class="empty compact"><span>No watches. A task arms one to follow a CI run, a deploy or a status page.</span></div></div>`;
   }
 
   /* ---------- knowledge ---------- */
   function knowledgeFrame() {
-    return `<div class="view-head"><div><h2>Knowledge</h2><p>What the team knows and how it works: shared memory every agent reads,
+    return `<div class="view-head"><div><h2>Knowledge</h2><p>What it knows and how it works: shared memory every task reads,
       procedures it saved as skills, and step-by-step playbooks for websites.</p></div></div>
       <div class="toolbar"><div class="tabs" id="know-tabs"></div></div><div id="know-body"></div>`;
   }
@@ -714,12 +720,12 @@
     if (D.knowTab !== "skills" || !$("#skill-results")) return;
     const skills = D.data.skills || [];
     $("#skill-results").innerHTML = skills.length ? `<div class="skill-grid">${skills.map((s) => `<article class="card skill-card">
-        <h4>${h(s.name)}</h4><p>${h(s.description || "A saved team procedure.")}</p>
+        <h4>${h(s.name)}</h4><p>${h(s.description || "A saved procedure.")}</p>
         ${s.avoid ? `<div class="avoid">Not for: ${h(s.avoid)}</div>` : ""}
         <div class="foot">${s.valid ? pill("completed", "Valid") : pill("failed", "Needs attention")}<span>${s.uses ? `used ${s.uses}×` : "not used yet"}</span><span class="spacer"></span>
           <button class="btn small ghost" data-act="skill" data-slug="${h(s.slug)}">Open</button>
           <button class="btn small" data-act="run-skill" data-slug="${h(s.slug)}" ${s.valid ? "" : "disabled"}>Run</button></div></article>`).join("")}</div>`
-      : `<div class="card"><div class="empty"><strong>No skills yet</strong><span>When an agent works out a procedure worth keeping, it saves it here for the whole team.</span></div></div>`;
+      : `<div class="card"><div class="empty"><strong>No skills yet</strong><span>When a task works out a procedure worth keeping, it is saved here.</span></div></div>`;
   }
   async function loadMemory() {
     const seq = ++D.memSeq;
@@ -743,13 +749,13 @@
           <span class="item-icon">${icon("globe")}</span><div class="item-main"><div class="item-title">${h(p.title)}</div>
           <div class="item-sub">${h(p.site)} · ${h(agentName(p.author))} · ${h(ago(p.ts))}</div></div>
           <div class="item-meta"><button class="btn small ghost danger" data-act="pb-del" data-site="${h(p.site)}" data-title="${h(p.title)}">Delete</button></div></div>`).join("")}</div>`
-        : `<div class="card"><div class="empty compact"><span>No playbooks yet. Agents save one after they work out how to do something on a website.</span></div></div>`;
+        : `<div class="card"><div class="empty compact"><span>No playbooks yet. A task saves one after it works out how to do something on a website.</span></div></div>`;
     } catch (err) { if ($("#pb-results")) $("#pb-results").textContent = err.message; }
   }
 
   /* ---------- evolution ---------- */
   function evolutionFrame() {
-    return `<div class="view-head"><div><h2>Getting better</h2><p>Your corrections and the team's repeated mistakes become lessons.
+    return `<div class="view-head"><div><h2>Getting better</h2><p>Your corrections and its repeated mistakes become lessons.
       Each lesson is tried first and kept only if the mistake stops happening; one that does not help is retired on its own.
       Lessons can make an agent more careful, never give it more permission.</p></div>
       <div class="view-actions" id="evo-actions"></div></div><div id="evo-body"><div class="muted">Loading…</div></div>`;
@@ -808,8 +814,8 @@
     const lessonCard = `<section class="section"><div class="section-head"><h3>Lessons</h3><span class="spacer"></span>
         <div class="tabs">${Object.keys(filters).map((k) => `<button class="${D.evoFilter === k ? "on" : ""}" data-act="evo-filter" data-filter="${k}">${names[k]}<b>${lessons.filter((l) => filters[k].includes(l.status)).length}</b></button>`).join("")}</div></div>
       <div class="card">${shown.length ? shown.map(lessonRow).join("") : `<div class="empty compact"><span>${D.evoFilter === "live" ? "No lessons yet. They come from your corrections and from failures that keep repeating." : "Nothing here."}</span></div>`}
-        <form class="add-lesson" id="lesson-form"><input class="deck-input" id="lesson-text" maxlength="280" placeholder="Teach the team something yourself, e.g. 'acmeshop lives in ~/Sites/acmeshop'">
-          <select class="deck-input" id="lesson-scope"><option value="*">Whole team</option>${agentOpts}</select>
+        <form class="add-lesson" id="lesson-form"><input class="deck-input" id="lesson-text" maxlength="280" placeholder="Teach it something yourself, e.g. 'acmeshop lives in ~/Sites/acmeshop'">
+          <select class="deck-input" id="lesson-scope"><option value="*">Everywhere</option>${agentOpts}</select>
           <button class="btn primary" type="submit">Add lesson</button></form></div></section>`;
     const clusters = e.clusters || [];
     const clusterCard = `<section class="section"><div class="section-head"><h3>Mistakes that keep repeating</h3><span class="count">last 14 days</span></div>
@@ -873,7 +879,7 @@
   };
   const SOURCE = { failure: "From repeated failures", correction: "From your correction", "owner-rule": "Your standing rule", owner: "Written by you" };
   function lessonRow(l) {
-    const scope = l.agent === "*" ? `${icon("users")}<span>Whole team</span>` : `${faceSVG(S.agents[l.agent], 16)}<span>${h(agentName(l.agent))}</span>`;
+    const scope = l.agent === "*" ? `${icon("users")}<span>Everywhere</span>` : `${faceSVG(S.agents[l.agent], 16)}<span>${h(agentName(l.agent))}</span>`;
     const statusPill = { trial: pill("trial", "On trial"), active: pill("adopted", "Adopted"), retired: pill("retired", "Retired"),
       suspended: pill("suspended", "Suspended"), proposed: pill("pending", "Waiting for your OK") }[l.status];
     const ev = l.evidence || {};
@@ -901,7 +907,7 @@
     try {
       await api("/api/lessons", { agent: $("#lesson-scope").value, text });
       $("#lesson-text").value = "";
-      notify("Lesson added. Agents read it from their next turn.");
+      notify("Lesson added. It applies from the next turn.");
       loadEvolution();
     } catch (err) { notify(err.message, true); }
   }
@@ -1008,8 +1014,8 @@
       ...p.scheduled.watches.map((w) => row("refresh", w.name, `watch · ${w.checks}/${w.max_checks} checks`)),
     ];
     $("#agent-panel").innerHTML = `<div class="ap-head">${faceSVG(a, 64, moodOf(a.id))}
-        <h3>${h(a.name)}</h3><div class="role">${h(p.agent.role || "Teammate")}</div>
-        <span class="model" title="${p.agent.own_model ? "Its own model" : "The team's model"}">${h(p.agent.model || "team model")}</span>
+        <h3>${h(a.name)}</h3><div class="role">${h(p.agent.role || "A role tasks can run as")}</div>
+        <span class="model" title="${p.agent.own_model ? "Its own model" : "The default model"}">${h(p.agent.model || "default model")}</span>
         <div class="ap-actions"><button class="btn small" data-act="edit-agent" data-agent="${h(a.id)}">${icon("edit")}Edit</button>
           ${st !== "idle" ? `<button class="btn small danger" data-act="stop-agent" data-agent="${h(a.id)}">${icon("stop", "fill")}Stop</button>` : ""}</div></div>
       <div class="ap-stats"><div><b>${s.clean_rate === null || s.clean_rate === undefined ? "—" : pct(s.clean_rate)}</b><span>clean runs</span></div>
@@ -1018,7 +1024,7 @@
       <div class="ap-section"><h4>Active <span>${p.active.length || ""}</span></h4>${p.active.map((m) => row("tasks", m.objective.slice(0, 140), `${m.status} · ${ago(m.updated)}`)).join("") || `<div class="ap-empty">No open tasks</div>`}</div>
       <div class="ap-section"><h4>Scheduled <span>${scheduled.length || ""}</span></h4>${scheduled.join("") || `<div class="ap-empty">Nothing scheduled</div>`}</div>
       <div class="ap-section"><h4>Done this week <span>${p.done.length || ""}</span></h4>${p.done.map((m) => row(m.status === "completed" ? "check" : "alert", m.objective.slice(0, 140), `${m.status} · ${ago(m.updated)}`)).join("") || `<div class="ap-empty">Nothing finished yet this week</div>`}</div>
-      <div class="ap-section"><h4>Lessons <span>${p.lessons.length || ""}</span></h4>${p.lessons.slice(0, 8).map((l) => row(l.status === "active" ? "check" : "flask", l.text, `${l.agent === "*" ? "whole team" : "own"} · ${l.status === "active" ? "adopted" : "on trial"}`)).join("") || `<div class="ap-empty">No lessons yet</div>`}</div>`;
+      <div class="ap-section"><h4>Lessons <span>${p.lessons.length || ""}</span></h4>${p.lessons.slice(0, 8).map((l) => row(l.status === "active" ? "check" : "flask", l.text, `${l.agent === "*" ? "everywhere" : "own"} · ${l.status === "active" ? "adopted" : "on trial"}`)).join("") || `<div class="ap-empty">No lessons yet</div>`}</div>`;
   }
   function refreshPanelSoon() {
     if (D.view !== "chat" || $("#agent-panel").classList.contains("hidden") || !D.panelAgent) return;
@@ -1041,7 +1047,7 @@
     const records = (D.data.executions || []).filter((e) => e.mission === id);
     const worker = (D.data.workers || []).find((w) => w.mission === id);
     inspect("Task", `${pill(m.status)}<h3>Objective</h3><pre>${h(m.objective)}</pre>
-      <h3>Latest result or checkpoint</h3><pre>${h(m.result || "The team has not reported a result yet.")}</pre>
+      <h3>Latest result or checkpoint</h3><pre>${h(m.result || "No result has been reported yet.")}</pre>
       ${records.length ? `<h3>Steps recorded</h3><div class="list card">${records.slice(0, 12).map((e) => `<button class="item" data-act="execution" data-id="${h(e.id)}">
         <span class="item-icon">${icon("bolt")}</span><div class="item-main"><div class="item-title">${h(e.name.replaceAll("_", " "))}</div><div class="item-sub">${h(agentName(e.agent))} · ${h(ago(e.ts))}</div></div>${pill(e.status)}</button>`).join("")}</div>` : ""}
       <div class="detail-meta">${h(agentName(m.agent))} · task ${h(m.id)} · started ${h(new Date(m.ts * 1000).toLocaleString())}</div>
@@ -1106,8 +1112,8 @@
     const out = [];
     const views = Object.entries(VIEWS).map(([id, title]) => ({ group: "Go to", title, icon: { home: "home", inbox: "inbox", missions: "tasks", schedule: "clock", knowledge: "book", evolution: "growth" }[id], run: () => show(id) }));
     const agents = Object.values(S.agents).sort((a, b) => (a.order ?? 99) - (b.order ?? 99)).map((a) => ({
-      group: "Team", title: a.name, sub: a.blurb, face: a, run: () => openThread(`dm:${a.id}`) }));
-    agents.unshift({ group: "Team", title: "Team chat", sub: "Everyone", icon: "users", run: () => openThread("group:team") });
+      group: "Profiles", title: a.name, sub: a.blurb, face: a, run: () => openThread(`dm:${a.id}`) }));
+    agents.unshift({ group: "Profiles", title: "Group chat", sub: "The agent, or any profile you @mention", icon: "users", run: () => openThread("group:team") });
     const commands = D.commands.map((c) => ({ group: "Commands", title: c.usage, sub: c.description, icon: "term",
       run: () => ["help", "status", "agents", "watches"].includes(c.name) ? runCommand(`/${c.name}`) : prefill(`/${c.name} `) }));
     for (const item of [...views, ...agents, ...ACTIONS.map((a) => ({ ...a, group: "Actions" })), ...commands]) {
@@ -1263,7 +1269,7 @@
         break;
       case "approval":
         b.disabled = true;
-        try { await api(`/api/approvals/${d.id}/${d.do}`, {}); notify(d.do === "approve" ? "Ran it. The agent has the output." : "Declined. The agent has been told."); refresh(); }
+        try { await api(`/api/approvals/${d.id}/${d.do}`, {}); notify(d.do === "approve" ? "Ran it. The task has the output." : "Declined. The agent has been told."); refresh(); }
         catch (err) { notify(err.message, true); b.disabled = false; }
         break;
       case "job":

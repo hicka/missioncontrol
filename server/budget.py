@@ -49,7 +49,7 @@ def check(today: str | None = None, thread: str = "") -> tuple[str, str | None]:
             return "stop", None
         _noted["stop:" + thread] = today
         return "stop", (f"daily budget reached: {used:,} of {limit:,} tokens used today. "
-                        "The team pauses until midnight, or raise the budget in Settings.")
+                        "Work pauses until midnight, or raise the budget in Settings.")
     if used >= limit * WARN_AT:
         if _noted.get("warn") == today:
             return "ok", None

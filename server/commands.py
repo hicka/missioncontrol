@@ -18,17 +18,17 @@ CATALOG = [
     {"name": "watchdog", "usage": "/watchdog question", "description": "Ask the watchdog why something happened, or to correct something."},
     {"name": "skill", "usage": '/skill slug {"input": "value"}', "description": "Run a skill with validated inputs and a bounded tool budget."},
     {"name": "status", "usage": "/status", "description": "See agents, active missions and watches. No model call."},
-    {"name": "agents", "usage": "/agents", "description": "Show the team and each agent's state."},
-    {"name": "stop", "usage": "/stop [@agent|all]", "description": "Cancel current and queued work for an agent or the team."},
+    {"name": "agents", "usage": "/agents", "description": "Show each profile and what it is doing."},
+    {"name": "stop", "usage": "/stop [@agent|all]", "description": "Cancel current and queued work for a profile, or all of it."},
     {"name": "pause", "usage": "/pause", "description": "Stop picking up work, without losing any. Events are still recorded. No model call."},
     {"name": "unpause", "usage": "/unpause", "description": "Carry on with everything that waited. No model call."},
     {"name": "resume", "usage": "/resume mission-id", "description": "Resume an interrupted mission from its checkpoint."},
-    {"name": "remember", "usage": "/remember fact", "description": "Save a fact to persistent team memory."},
+    {"name": "remember", "usage": "/remember fact", "description": "Save a fact to persistent shared memory."},
     {"name": "recall", "usage": "/recall search terms", "description": "Search shared memory, including older entries."},
     {"name": "watches", "usage": "/watches", "description": "Inspect background watches and their latest results."},
     {"name": "watch", "usage": "/watch cancel id", "description": "Stop a background watch."},
     {"name": "model", "usage": "/model [provider] model | /model reset",
-     "description": "Pick this agent's model (or show it). reset returns it to the team default. No model call."},
+     "description": "Pick this agent's model (or show it). reset returns it to the default. No model call."},
     {"name": "effort", "usage": "/effort none|low|medium|high|max | reset",
      "description": "How hard this agent's model thinks; lower answers faster. No model call."},
     {"name": "help", "usage": "/help", "description": "Show available commands."},
@@ -39,8 +39,8 @@ def _model_line(orch, aid: str) -> str:
     import llm
     r = llm._resolved(orch.agent_llm(aid))
     own = orch.agents[aid].get("llm") or {}
-    source = "own setting" if own.get("model") or own.get("provider") else "team default"
-    effort_src = "own setting" if own.get("effort") else "team default"
+    source = "own setting" if own.get("model") or own.get("provider") else "default"
+    effort_src = "own setting" if own.get("effort") else "default"
     return (f"@{aid} runs {r['provider']}/{r['model']} ({source}) at {r['effort']} effort ({effort_src}). "
             f"Change with /model [provider] model and /effort level.")
 

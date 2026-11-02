@@ -77,8 +77,8 @@
       <button data-deck="evolution"><svg class="i"><use href="#i-growth"/></svg><span>Evolution</span><b id="nav-evolution-mark" class="nav-count hidden"></b></button>
     </nav>
     <div class="side-section">
-      <span>Team</span>
-      <button class="icon-btn new-chat" title="New agent" aria-label="Create agent"><svg class="i"><use href="#i-plus"/></svg></button>
+      <span>Agent</span>
+      <button class="icon-btn new-chat" title="New profile" aria-label="Create profile"><svg class="i"><use href="#i-plus"/></svg></button>
     </div>
     <div class="search-wrap">
       <svg class="i search-ico"><use href="#i-search"/></svg>
@@ -157,7 +157,7 @@
 
 <div id="command-palette" class="hidden" role="dialog" aria-modal="true" aria-labelledby="palette-title">
   <div class="palette-panel">
-    <div class="palette-input"><svg class="i"><use href="#i-search"/></svg><input id="palette-search" placeholder="Search views, agents and commands" aria-label="Search" autocomplete="off"><button id="palette-close" class="kbd-btn" aria-label="Close">esc</button></div>
+    <div class="palette-input"><svg class="i"><use href="#i-search"/></svg><input id="palette-search" placeholder="Search views, profiles and commands" aria-label="Search" autocomplete="off"><button id="palette-close" class="kbd-btn" aria-label="Close">esc</button></div>
     <span id="palette-title" class="sr-only">Search and commands</span>
     <div id="palette-results" role="listbox" aria-label="Results"></div>
     <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span></div>
@@ -167,14 +167,14 @@
 
 <div id="modal-backdrop" class="hidden">
   <div id="new-agent-modal" role="dialog" aria-modal="true" aria-labelledby="na-title">
-    <h2 id="na-title">New agent</h2>
+    <h2 id="na-title">New profile</h2>
     <div class="na-row">
       <span id="na-preview"></span>
       <input id="na-name" type="text" placeholder="Name, e.g. QA Engineer" autocomplete="off">
     </div>
     <div class="na-swatches" id="na-swatches"></div>
     <label class="field-label" for="na-prompt">Role</label>
-    <textarea id="na-prompt" rows="5" placeholder="What they own, how they work, what they're responsible for. Written to the agent as 'You are…'"></textarea>
+    <textarea id="na-prompt" rows="5" placeholder="What it owns, how it works, what it is responsible for. Written to it as 'You are…'"></textarea>
     <label class="field-label" for="na-cwd">Workspace folder</label>
     <input id="na-cwd" type="text" placeholder="Optional, e.g. ~/Sites/myrepo" autocomplete="off" spellcheck="false">
     <label class="field-label">Model</label>
@@ -224,7 +224,7 @@
     </div>
 
     <div class="set-pane hidden" id="pane-browser">
-      <div class="set-hint top">Your agents can browse, search and work in websites you assign. Open their browser and sign in once; all agents share those sessions. Use chat to give an agent the website and task.</div>
+      <div class="set-hint top">The agent can browse, search and work in websites you assign. Open its browser and sign in once; every task shares those sessions. Use chat to give it the website and task.</div>
       <div id="browser-auth-requests" aria-live="polite"></div>
       <div class="set-card">
         <div class="set-row">
@@ -251,7 +251,7 @@
           <div class="set-row"><input class="set-control" id="browser-credential-username" required maxlength="320" placeholder="Username or email" aria-label="Saved login username" autocomplete="off"><input class="set-control" id="browser-credential-password" type="password" required maxlength="4096" placeholder="Password" aria-label="Saved login password" autocomplete="new-password"></div>
           <div class="set-row"><button class="btn primary" id="browser-credential-save" type="submit">Save login securely</button><button class="btn hidden" id="browser-credential-cancel" type="button">Cancel update</button></div>
         </form>
-        <div class="set-row-note">Saved in your operating system's credential vault for this exact HTTPS address. Agents use the login without receiving its password. 2FA codes are used once and never saved in the vault.</div>
+        <div class="set-row-note">Saved in your operating system's credential vault for this exact HTTPS address. The agent uses the login without receiving its password. 2FA codes are used once and never saved in the vault.</div>
       </div>
       <div class="set-card">
         <form id="browser-open-form" class="set-row">
@@ -269,7 +269,7 @@
     </div>
 
     <div class="set-pane hidden" id="pane-apple">
-      <div class="set-hint top">Your own Mac apps, one switch each. Agents read widely and write narrowly: they can add a note, an event or a reminder, and draft mail — never send it. Messages is read-only; texting still goes through the iMessage channel.</div>
+      <div class="set-hint top">Your own Mac apps, one switch each. It reads widely and writes narrowly: it can add a note, an event or a reminder, and draft mail — never send it. Messages is read-only; texting still goes through the iMessage channel.</div>
       <div class="set-card" id="apple-list"></div>
       <div class="set-hint" id="apple-note"></div>
     </div>
@@ -278,13 +278,13 @@
       <div class="set-hint top">Mission Control can change its own code. Every change is written and tested on its own branch, never in the running code. These switches decide what lands on its own and what waits for you.</div>
       <div class="set-card">
         <div class="set-row">
-          <div class="set-row-label">Let agents propose changes</div>
-          <div class="set-row-note">An agent that hits a real limitation in the app can put a tested branch in front of you. Agents' proposals always wait for your approval.</div>
+          <div class="set-row-label">Let it propose changes</div>
+          <div class="set-row-note">A task that hits a real limitation in the app can put a tested branch in front of you. Proposals always wait for your approval.</div>
           <label class="switch"><input type="checkbox" class="improve-switch" data-key="enabled" id="improve-enabled"><span></span></label>
         </div>
         <div class="set-row">
           <div class="set-row-label">Find and fix its own problems</div>
-          <div class="set-row-note">Watches the team's turns for problems that are the app's fault, like replies cut off at the output limit or turns that crash the same way, and has Claude Code write a fix with a test.</div>
+          <div class="set-row-note">Watches its turns for problems that are the app's fault, like replies cut off at the output limit or turns that crash the same way, and has Claude Code write a fix with a test.</div>
           <label class="switch"><input type="checkbox" class="improve-switch" data-key="autofix"><span></span></label>
         </div>
         <div class="set-row">
@@ -306,12 +306,12 @@
     </div>
 
     <div class="set-pane hidden" id="pane-memory">
-      <div class="set-hint top">What the team believes, in one place. Fix a wrong memory, delete a stale one, rewrite a skill; agents see the change on their next turn.</div>
+      <div class="set-hint top">What it believes, in one place. Fix a wrong memory, delete a stale one, rewrite a skill; it sees the change on its next turn.</div>
       <div class="set-row">
-        <input id="mem-q" class="set-control wide" type="text" placeholder="search team memory" autocomplete="off" spellcheck="false">
+        <input id="mem-q" class="set-control wide" type="text" placeholder="search memory" autocomplete="off" spellcheck="false">
       </div>
       <div id="mem-list" class="mem-list"></div>
-      <div class="set-row" style="margin-top:18px"><div class="set-row-label">Skills</div><div class="set-hint" style="margin:0">Procedures the team saved for itself. Click one to edit.</div></div>
+      <div class="set-row" style="margin-top:18px"><div class="set-row-label">Skills</div><div class="set-hint" style="margin:0">Procedures it saved for itself. Click one to edit.</div></div>
       <label class="na-check" id="autolearn-row">
         <input type="checkbox" id="autolearn">
         <span>Learn skills automatically after long pieces of work</span>
@@ -389,7 +389,7 @@
 
       <div class="set-card" id="voice-card">
         <div class="set-row">
-          <div class="set-row-label">Team voice</div>
+          <div class="set-row-label">Voice</div>
           <select id="voice-id" class="set-control"></select>
         </div>
         <div class="set-row">
@@ -415,7 +415,7 @@
     </div>
 
     <div class="set-pane hidden" id="pane-channels">
-      <div class="set-hint top">Message your team from your phone. Each channel routes to the agent you choose, and that agent's replies mirror back.</div>
+      <div class="set-hint top">Reach the agent from your phone. It answers on the channel you last spoke on.</div>
       <div id="channel-cards"></div>
       <div class="set-hint" id="channels-public-url"></div>
       <div class="set-card" id="devices-card">
@@ -424,7 +424,7 @@
           <div class="set-hint" id="devices-list" style="margin:0;flex:1"></div>
           <button class="btn ghost" id="push-test">Send test push</button>
         </div>
-        <div class="set-hint">The Mission Control app on a phone registers itself when it connects. When you are away from every app window, an agent's reply buzzes the phone directly; no account, no cloud in between.</div>
+        <div class="set-hint">The Mission Control app on a phone registers itself when it connects. When you are away from every app window, the agent's reply buzzes the phone directly; no account, no cloud in between.</div>
         <div class="set-status" id="push-status"></div>
       </div>
     </div>
@@ -472,7 +472,7 @@
           <button class="btn primary" id="brief-save">Save</button>
         </div>
       </div>
-      <div class="set-hint top">Agents can schedule recurring or one-off work, but nothing runs until you approve it here.</div>
+      <div class="set-hint top">The agent can schedule recurring or one-off work, but nothing runs until you approve it here.</div>
       <div id="job-cards"></div>
     </div>
 
@@ -505,7 +505,7 @@
       <div class="set-card">
         <div class="set-row">
           <div class="set-row-label">Webhooks</div>
-          <div class="set-row-note">Let any service reach your team: each route gets a URL that wakes an agent with the payload, or just drops it in the chat at zero model cost.</div>
+          <div class="set-row-note">Let any service reach the agent: each route gets a URL that wakes it with the payload, or just drops it in the chat at zero model cost.</div>
         </div>
         <div id="hook-list" class="set-hint" style="margin:4px 0 8px; user-select:text"></div>
         <div class="set-row">
@@ -523,7 +523,7 @@
       <div class="set-card" id="wa-card">
         <div class="set-row">
           <div class="set-row-label">WhatsApp</div>
-          <div class="set-row-note">Your own account, linked to this Mac the way WhatsApp Web is. Agents can read what arrives and the files people send you; nothing can send, reply or mark a chat read.</div>
+          <div class="set-row-note">Your own account, linked to this Mac the way WhatsApp Web is. The agent can read what arrives and the files people send you; nothing can send, reply or mark a chat read.</div>
           <label class="switch"><input type="checkbox" id="wa-enabled"><span></span></label>
         </div>
         <div class="set-row">
@@ -560,9 +560,9 @@
           <input id="wa-ignore" class="set-control" type="text" placeholder="Chat names or phone numbers" spellcheck="false">
         </div>
         <div class="set-row">
-          <div class="set-row-label">Agents who can read</div>
-          <input id="wa-agents" class="set-control" type="text" placeholder="All agents" spellcheck="false"
-                 title="Agent ids, comma-separated. Blank for every agent.">
+          <div class="set-row-label">Profiles that can read</div>
+          <input id="wa-agents" class="set-control" type="text" placeholder="All profiles" spellcheck="false"
+                 title="Profile ids, comma-separated. Blank for all of them.">
         </div>
         <div class="set-hint" id="wa-counts"></div>
         <div class="set-footer">
@@ -574,7 +574,7 @@
       <div class="set-card" id="mcp-card">
         <div class="set-row">
           <div class="set-row-label">MCP servers</div>
-          <div class="set-row-note">Give your agents tools from other apps. They reach them through the mcp tool; a call the server marks destructive waits in your Inbox until you approve it.</div>
+          <div class="set-row-note">Give the agent tools from other apps. It reaches them through the mcp tool; a call the server marks destructive waits in your Inbox until you approve it.</div>
         </div>
         <div id="mcp-list"></div>
         <div class="set-row stack">
@@ -591,13 +591,13 @@
       <div class="set-card">
         <div class="set-row">
           <div class="set-row-label">Import</div>
-          <div class="set-row-note">Pull skills or starter agents from a git repository. Only import sources you trust: skills are instructions your agents will follow.</div>
+          <div class="set-row-note">Pull skills or starter profiles from a git repository. Only import sources you trust: skills are instructions the agent will follow.</div>
         </div>
         <div class="set-row">
           <input id="import-url" class="set-control" type="text" placeholder="https://github.com/user/repo" spellcheck="false" style="flex:1">
           <select id="import-kind" class="set-control" style="flex:0 0 110px">
             <option value="skills">skills</option>
-            <option value="agents">agents</option>
+            <option value="agents">profiles</option>
           </select>
           <button class="btn primary" id="import-run">Import</button>
         </div>
@@ -607,7 +607,7 @@
       <div class="set-card">
         <div class="set-row">
           <div class="set-row-label">Add a machine</div>
-          <div class="set-row-note">Run Mission Control on several machines as one team: shared memory, skills and playbooks, and agents that message each other across machines. One paste connects them.</div>
+          <div class="set-row-note">Run Mission Control on several machines as one agent: shared memory, skills and playbooks, and tasks handed across machines. One paste connects them.</div>
         </div>
         <div class="set-row">
           <div class="set-row-label">Tailscale</div>
@@ -741,7 +741,7 @@
   <div id="welcome-modal" role="dialog" aria-modal="true" aria-labelledby="wel-title">
     <div class="wel-mark" aria-hidden="true"><span class="brand-mark big"><i></i><i></i><i></i></span></div>
     <h2 id="wel-title">Plug in a model</h2>
-    <p class="wel-sub">Your team is here. It only needs something to think with.</p>
+    <p class="wel-sub">Your agent is here. It only needs something to think with.</p>
     <input id="wel-name" class="set-control wide" type="text" placeholder="Your name" autocomplete="off" maxlength="40" style="margin-bottom:10px">
     <div class="wel-divider"><span>and a model</span></div>
     <div id="wel-local" class="wel-option hidden">
