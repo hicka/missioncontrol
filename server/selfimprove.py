@@ -89,6 +89,10 @@ PROTECTED = (
     "whatsapp/",               # the bridge that can only listen, never send as the owner
     ".github/",                # CI, release signing
     "requirements.txt",        # dependency swaps are a supply-chain change
+    "server/selfupdate.py",    # what every installed copy will run next
+    "native/macos/Updates.swift",  # and how the signed app takes it
+    "scripts/build_macos.py",  # what goes into a signed release
+    "packaging/",              # entitlements and the frozen runtime's contents
 )
 PROTECTED_PATTERNS = (
     re.compile(r"(^|/)\.env"),

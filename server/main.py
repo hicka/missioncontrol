@@ -324,6 +324,10 @@ def configure_runtime():
                 "them on a tested branch, and lands and pushes them when you allow it.",
                 run=lambda: selfimprove.loop(orch, broadcast), dependencies=("agents",),
                 group="harness", settings_tab="improve")
+    manager.add("updates", "Updates", "Keeps a source checkout on the latest release, when you allow it, "
+                "and only while nothing is running.",
+                run=lambda: selfupdate.loop(orch, broadcast), dependencies=("agents",),
+                group="harness", settings_tab="improve")
     manager.add("scheduler", "Scheduled jobs", "Runs owner-approved jobs and monitor checks.",
                 run=lambda: cron_mod.scheduler(orch, broadcast), dependencies=("agents",), settings_tab="jobs")
     manager.add("heartbeat", "Heartbeat", "Periodic checks against your heartbeat checklist.",
@@ -1897,6 +1901,34 @@ async def improvements_enabled(body: ImproveBody):
     if changes:
         cfg.update("selfimprove", changes)
     return {"ok": True, **si.settings()}
+
+
+class UpdatesBody(BaseModel):
+    auto: bool | None = None
+    channel: Literal["release", "master"] | None = None
+
+
+@app.get("/api/updates")
+async def updates_status():
+    import selfupdate
+    config = selfupdate.settings()
+    return {**selfupdate.status, "auto": config["auto"], "channel": config["channel"]}
+
+
+@app.put("/api/updates")
+async def updates_settings(body: UpdatesBody):
+    import selfupdate
+    changes = body.model_dump(exclude_none=True)
+    if changes:
+        cfg.update("updates", changes)
+    return {"ok": True, **selfupdate.settings()}
+
+
+@app.post("/api/updates/check")
+async def updates_check(install: bool = False):
+    """Look now. With install, move to what is found even if automatic updates are off."""
+    import selfupdate
+    return {"ok": True, **await selfupdate.check(orch, True if install else None)}
 
 
 @app.post("/api/improvements/check")
