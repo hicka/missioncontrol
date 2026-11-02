@@ -1,0 +1,115 @@
+import SwiftUI
+
+/// The main window: the sections and chats on the left, the one in view on the right.
+struct ShellView: View {
+    @Environment(Store.self) private var store
+    let runtime: RuntimeModel
+
+    var body: some View {
+        NavigationSplitView {
+            Sidebar()
+                .navigationSplitViewColumnWidth(min: 200, ideal: 228, max: 300)
+        } detail: {
+            detail
+                .frame(minWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: .windowBackgroundColor))
+        }
+        .overlay(alignment: .bottom) { ToastStack() }
+        .overlay { CommandPaletteHost() }
+        .onChange(of: store.route, initial: true) { _, route in runtime.managerVisible = route == .runtime }
+    }
+
+    @ViewBuilder private var detail: some View {
+        switch store.route {
+        case .home: HomeView()
+        case .inbox: InboxView()
+        case .tasks: TasksView()
+        case .activity: ActivityView()
+        case .schedule: ScheduleView()
+        case .knowledge: KnowledgeView()
+        case .evolution: EvolutionView()
+        case .runtime: RuntimeView(model: runtime)
+        case .chat(let id): ChatView(threadID: id).id(id)
+        case .settings(let tab): SettingsView(initialTab: tab)
+        }
+    }
+}
+
+private struct Sidebar: View {
+    @Environment(Store.self) private var store
+
+    var body: some View {
+        @Bindable var store = store
+        List(selection: Binding<Route?>(get: { store.route }, set: { if let route = $0 { store.route = route; if case .chat(let id) = route { store.unread.remove(id) } } })) {
+            Section {
+                row("Home", "house", .home)
+                row("Inbox", "tray", .inbox, badge: store.inbox.count, tone: MC.warn)
+                row("Tasks", "checklist", .tasks, badge: store.openMissions.count)
+                row("Activity", "bolt", .activity, badge: store.workingCount)
+                row("Schedule", "clock", .schedule, badge: store.activeWatchCount)
+                row("Knowledge", "book", .knowledge)
+                row("Evolution", "chart.line.uptrend.xyaxis", .evolution, badge: store.evolution.trial.int)
+            }
+            Section("Chats") {
+                ForEach(store.threadRows) { thread in ThreadRow(thread: thread).tag(Route.chat(thread.id)) }
+            }
+        }
+        .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom) { footer }
+    }
+
+    private func row(_ title: String, _ icon: String, _ route: Route, badge: Int = 0, tone: Color = .secondary) -> some View {
+        Label(title, systemImage: icon)
+            .badge(badge > 0 ? Text("\(badge)").foregroundColor(tone) : nil)
+            .tag(route)
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            Circle().fill(store.link ? MC.good : MC.warn).frame(width: 7, height: 7)
+            Text(store.link ? (store.user.name.optStr ?? "Connected") : "Reconnecting…").font(.system(size: 12)).lineLimit(1)
+            Spacer()
+            Button { store.paletteOpen = true } label: { Image(systemName: "magnifyingglass") }.buttonStyle(.plain).help("Search and commands (⌘K)").accessibilityLabel("Search and commands")
+            Button { store.route = .runtime } label: { Image(systemName: "cpu") }.buttonStyle(.plain).help("Runtime Manager").accessibilityLabel("Runtime Manager")
+            Button { store.route = .settings("llm") } label: { Image(systemName: "gearshape") }.buttonStyle(.plain).help("Settings").accessibilityLabel("Settings")
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 14).padding(.vertical, 10)
+    }
+}
+
+private struct ThreadRow: View {
+    @Environment(Store.self) private var store
+    let thread: JSON
+
+    var body: some View {
+        let agentID = thread.agent.str
+        HStack(spacing: 8) {
+            if thread.kind.str == "dm" { AgentBadge(agent: store.agent(agentID), size: 20) } else { Image(systemName: "person.3").frame(width: 20) }
+            VStack(alignment: .leading, spacing: 0) {
+                Text(thread.name.str).font(.system(size: 13)).lineLimit(1)
+                if let tool = store.tools[agentID] { Text(tool.replacingOccurrences(of: "_", with: " ")).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1) }
+            }
+            Spacer()
+            if store.unread.contains(thread.id) { Circle().fill(Color.accentColor).frame(width: 7, height: 7).accessibilityLabel("Unread") }
+            else if store.isBusy(agentID) { ProgressView().controlSize(.mini).accessibilityLabel("Working") }
+        }
+    }
+}
+
+private struct ToastStack: View {
+    @Environment(Store.self) private var store
+    var body: some View {
+        VStack(spacing: 6) {
+            ForEach(store.toasts) { toast in
+                Text(toast.text).font(.callout).lineLimit(3)
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .glassBackground(cornerRadius: 12)
+                    .foregroundStyle(toast.error ? MC.danger : .primary)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: store.toasts)
+        .padding(.bottom, 18)
+    }
+}

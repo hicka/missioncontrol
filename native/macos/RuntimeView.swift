@@ -1,7 +1,7 @@
 import SwiftUI
 
-private let accent = Color(red: 0.36, green: 0.94, blue: 0.81)
-private let panel = Color(red: 0.065, green: 0.085, blue: 0.105)
+private let accent = Color.accentColor
+private let panel = MC.surface
 
 struct RuntimeView: View {
     @ObservedObject var model: RuntimeModel
@@ -12,19 +12,19 @@ struct RuntimeView: View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 20) {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("MISSION CONTROL / NATIVE HOST").font(.system(size: 10, weight: .semibold, design: .monospaced)).tracking(2).foregroundColor(accent)
-                    Text("Runtime manager").font(.system(size: 30, weight: .semibold))
+                    Text("Runtime manager").font(.system(size: 24, weight: .semibold))
                     Text("Every service, harness and process. One place to stay in control.").foregroundStyle(.secondary)
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 12) {
-                    HStack(spacing: 7) { Circle().fill(model.status == "Running" ? accent : .orange).frame(width: 6, height: 6); Text(model.status).font(.system(.caption, design: .monospaced)) }
+                    HStack(spacing: 7) { Circle().fill(["Running", "Attached"].contains(model.status) ? MC.good : .orange).frame(width: 6, height: 6); Text(model.status).font(.system(.caption, design: .monospaced)) }
                     HStack {
-                        if model.isRunning {
+                        if model.attached {
+                            Text("Started outside this app").font(.caption).foregroundStyle(.secondary)
+                        } else if model.isRunning {
                             Button("Restart runtime") { model.stop(restart: true) }
                             Button("Stop runtime") { model.stop() }
                         } else { Button("Start runtime") { model.crashCount = 0; model.start() }.tint(accent) }
-                        Button("Open workspace ↗") { model.onShowWorkspace?() }.disabled(model.snapshot == nil)
                     }.disabled(model.busy)
                 }
             }.padding(28)
@@ -54,13 +54,26 @@ struct RuntimeView: View {
                 }.padding(.horizontal, 28).padding(.bottom, 24).frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack {
-                Image(systemName: "externaldrive"); Text(model.dataHome).lineLimit(1).truncationMode(.middle)
+                Image(systemName: "externaldrive"); Text(model.snapshot?.data_home ?? model.dataHome).lineLimit(1).truncationMode(.middle)
                 Spacer(); Text("HOST \(ProcessInfo.processInfo.processIdentifier)")
                 if let pid = model.engine?.processIdentifier, model.isRunning { Text("· RUNTIME \(pid)") }
                 if let pid = model.inventoryPID { Text("· INVENTORY \(pid)") }
                 if let updated = model.lastUpdated { Text("· \(updated.formatted(date: .omitted, time: .standard))") }
             }.font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary).padding(14).background(panel)
-        }.background(Color(red: 0.035, green: 0.047, blue: 0.06)).preferredColorScheme(.dark)
+        }
+    }
+
+    /// The server's `settings_tab` names the web's eight tabs. Here most of these have a pane of their own.
+    private func paneFor(_ service: MCService) -> String {
+        switch service.id {
+        case "whatsapp": return "whatsapp"
+        case "public_listener", "tunnel": return "hooks"
+        case "fleet_listener", "fleet_sync": return "fleet"
+        case "heartbeat", "brief": return "jobs"
+        case "updates": return "updates"
+        case "mail_sweep": return "mail"
+        default: return service.settings_tab
+        }
     }
 
     private func metric(_ title: String, _ value: String, _ caption: String) -> some View {
@@ -71,7 +84,7 @@ struct RuntimeView: View {
         }.frame(maxWidth: .infinity, alignment: .leading).padding(18).background(panel).clipShape(RoundedRectangle(cornerRadius: 10))
     }
     private func status(_ value: String) -> some View {
-        Text(value.uppercased()).font(.system(size: 10, weight: .semibold, design: .monospaced)).foregroundColor(["running", "idle", "enforced", "enabled"].contains(value) ? accent : .secondary).padding(.horizontal, 9).padding(.vertical, 5).background(Color.white.opacity(0.045)).clipShape(Capsule())
+        Text(value.uppercased()).font(.system(size: 10, weight: .semibold, design: .monospaced)).foregroundColor(["running", "idle", "enforced", "enabled"].contains(value) ? accent : .secondary).padding(.horizontal, 9).padding(.vertical, 5).background(Color.primary.opacity(0.06)).clipShape(Capsule())
     }
     private func title(_ text: String, _ detail: String) -> some View {
         VStack(alignment: .leading, spacing: 5) { Text(text).font(.headline); Text(detail).font(.callout).foregroundStyle(.secondary) }.padding(.bottom, 3)
@@ -89,7 +102,7 @@ struct RuntimeView: View {
                             if !service.error.isEmpty { Text(service.error).font(.caption).foregroundColor(.orange).textSelection(.enabled) }
                         }
                         Spacer(); Text("\(service.tasks) tasks").font(.caption).foregroundStyle(.secondary); status(service.status)
-                        if !service.settings_tab.isEmpty { Button("Configure") { model.configure(service.settings_tab) }.disabled(model.snapshot == nil) }
+                        if !service.settings_tab.isEmpty { Button("Configure") { model.configure(paneFor(service)) }.disabled(model.snapshot == nil) }
                         Button("Restart") { model.serviceAction(service, "restart") }.disabled(!service.enabled)
                         Toggle("Enable \(service.name)", isOn: Binding(get: { service.enabled }, set: { model.serviceAction(service, $0 ? "start" : "stop") })).labelsHidden().toggleStyle(.switch).controlSize(.small)
                     }.padding(16).background(panel).clipShape(RoundedRectangle(cornerRadius: 8)).disabled(model.busy)
