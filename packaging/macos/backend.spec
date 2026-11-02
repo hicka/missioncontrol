@@ -21,7 +21,7 @@ exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='MCBackend',
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='MCBackend')
 app = BUNDLE(coll, name='MCBackend.app', bundle_identifier='com.missioncontrol.native.runtime',
              info_plist={
-                 'LSUIElement': True, 'LSMinimumSystemVersion': '13.0',
+                 'LSUIElement': True, 'LSMinimumSystemVersion': '14.0',
                  'CFBundleDisplayName': 'Mission Control Runtime',
                  'NSAppleEventsUsageDescription': 'Mission Control automates applications for tasks you assign to your agents.',
                  'NSMicrophoneUsageDescription': 'Mission Control uses the microphone for voice conversations.',

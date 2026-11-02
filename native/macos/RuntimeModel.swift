@@ -63,7 +63,12 @@ final class RuntimeModel: ObservableObject {
     @Published var screenCapture = false
     @Published var crashCount = 0
     @Published var inventoryPID: Int32?
-    var onReady: ((URL) -> Void)?
+    /// Talking to a runtime something else started: a source checkout under launchd, or
+    /// another Mac. It is used, never started or stopped, from here.
+    @Published var attached = false
+    /// The manager screen is open, so the full process inventory is worth reading.
+    var managerVisible = false
+    var onReady: ((URL, String) -> Void)?
     var onOpenSettings: ((String) -> Void)?
     var onShowWorkspace: (() -> Void)?
     var onNativeState: (() -> Void)?
@@ -80,8 +85,13 @@ final class RuntimeModel: ObservableObject {
     private var logHandle: FileHandle?
     private var helperQueue = DispatchQueue(label: "com.missioncontrol.inventory", qos: .utility)
     private var lastInventory = Date.distantPast
+    private var lastHealth = Date.distantPast
+    private var attachURL: URL?
+    private var token = ""
+    private var announced = false
+    private var noRuntimeAccess = false
     var isRunning: Bool { engine?.isRunning == true }
-    var url: URL { URL(string: "http://127.0.0.1:\(Int(runtimePort) ?? 8899)")! }
+    var url: URL { attachURL ?? URL(string: "http://127.0.0.1:\(Int(runtimePort) ?? 8899)")! }
     var worker: URL { Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/MCBackend.app/Contents/MacOS/MCBackend") }
 
     init() {
@@ -93,14 +103,40 @@ final class RuntimeModel: ObservableObject {
         runtimePort = option("--port") ?? defaults.string(forKey: "runtimePort") ?? "8899"
         keepRunning = defaults.bool(forKey: "keepRunning")
         restartOnFailure = defaults.bool(forKey: "restartOnFailure")
+        token = option("--token") ?? ProcessInfo.processInfo.environment["MC_TOKEN"] ?? ""
+        if let address = option("--attach"), let target = URL(string: address) { attachURL = target; attached = true; status = "Connecting" }
         updatePermissions()
     }
 
     func begin() {
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in Task { @MainActor in await self?.refresh() } }
-        Task { await refresh() }
-        if !CommandLine.arguments.contains("--no-start") { start() }
+        Task {
+            // A runtime already answering on this port is used as it is, whatever started
+            // it. Starting another would only be refused for holding the port.
+            if !attached, !CommandLine.arguments.contains("--no-start") {
+                // Under launchd it may just be restarting, and a second engine on the same
+                // data would be the worst thing to start. Wait for it instead.
+                // A data folder named on the command line is its own, isolated run.
+                let agent = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/com.missioncontrol.plist")
+                let isolated = CommandLine.arguments.contains("--data-home")
+                if !isolated, FileManager.default.fileExists(atPath: agent.path) { attachURL = url; attached = true; status = "Connecting" }
+                else if await answersHealth(url) { attachURL = url; attached = true; status = "Connecting" }
+                else { start() }
+            }
+            await refresh()
+        }
     }
+
+    private func answersHealth(_ address: URL) async -> Bool {
+        var request = URLRequest(url: address.appendingPathComponent("api/health")); request.timeoutInterval = 2
+        if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        guard let (data, response) = try? await URLSession.shared.data(for: request), (response as? HTTPURLResponse)?.statusCode == 200 else { return false }
+        return JSON(data: data)["router_alive"] != .null
+    }
+
+    /// The new version is about to replace this one. Sparkle relaunches the app afterwards,
+    /// so the owned runtime stops here and does not count as a crash.
+    func prepareForUpdate() { desired = false; restarting = false; stop() }
 
     private func environment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
@@ -108,6 +144,7 @@ final class RuntimeModel: ObservableObject {
         env["MISSIONCONTROL_INSTANCE"] = instance
         env["MISSIONCONTROL_OWNER_PID"] = String(ProcessInfo.processInfo.processIdentifier)
         env["MISSIONCONTROL_PORT"] = runtimePort
+        env["MISSIONCONTROL_APP_VERSION"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
         let browser = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/AgentBrowser.app")
         if let executable = Bundle(url: browser)?.executableURL { env["MISSIONCONTROL_BROWSER_EXECUTABLE"] = executable.path }
         env["PATH"] = "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
@@ -190,7 +227,16 @@ final class RuntimeModel: ObservableObject {
     func refresh() async {
         guard !refreshing, !quitting else { return }; refreshing = true
         defer { refreshing = false; onNativeState?() }
-        updatePermissions()
+        if managerVisible { updatePermissions() }
+        if attached { await refreshAttached(); return }
+        // The inventory scans every process on the Mac. Once this runtime is known to be
+        // the right one, a health check is all the window needs unless the manager is open.
+        if isRunning, snapshot != nil, !managerVisible {
+            guard Date().timeIntervalSince(lastHealth) >= 6 else { return }
+            lastHealth = Date()
+            if await answersHealth(url) { status = "Running" } else { snapshot = nil }
+            return
+        }
         if isRunning {
             do {
                 var request = URLRequest(url: url.appendingPathComponent("api/runtime")); request.timeoutInterval = 3
@@ -201,15 +247,37 @@ final class RuntimeModel: ObservableObject {
                     error = "Port \(runtimePort) belongs to another instance. Choose a different port or stop that instance below."; return
                 }
                 snapshot = next; processes = next.processes; loginServices = next.launch_services; lastUpdated = Date(); status = "Running"
-                if loadedPID != engine!.processIdentifier { loadedPID = engine!.processIdentifier; onReady?(url) }
+                if loadedPID != engine!.processIdentifier { loadedPID = engine!.processIdentifier; onReady?(url, token) }
             } catch {
                 if let started, Date().timeIntervalSince(started) > 45 { self.error = "Runtime is not responding. Open logs to inspect startup or port conflicts." }
             }
         }
-        if snapshot == nil && Date().timeIntervalSince(lastInventory) > 5 {
+        if snapshot == nil && !attached && Date().timeIntervalSince(lastInventory) > 5 {
             lastInventory = Date()
             do { let data = try await helper(["--inventory"]); let inventory = try JSONDecoder().decode(MCInventory.self, from: data); processes = inventory.processes; loginServices = inventory.launch_services; lastUpdated = Date() }
             catch { self.error = "Inventory: " + error.localizedDescription }
+        }
+    }
+
+    private func refreshAttached() async {
+        if !managerVisible || noRuntimeAccess {
+            guard Date().timeIntervalSince(lastHealth) >= 5 else { return }
+        }
+        lastHealth = Date()
+        guard await answersHealth(url) else {
+            // launchd restarts it often, so this is expected and gets no error message.
+            status = "Waiting for runtime"; snapshot = nil; processes = []
+            return
+        }
+        status = "Attached"
+        if !announced { announced = true; onReady?(url, token) }
+        guard managerVisible, !noRuntimeAccess else { return }
+        var request = URLRequest(url: url.appendingPathComponent("api/runtime")); request.timeoutInterval = 4
+        guard let (data, response) = try? await URLSession.shared.data(for: request) else { return }
+        // A runtime on another Mac keeps its process controls to itself.
+        if (response as? HTTPURLResponse)?.statusCode == 403 { noRuntimeAccess = true; return }
+        if let next = try? JSONDecoder().decode(MCSnapshot.self, from: data) {
+            snapshot = next; processes = next.processes; loginServices = next.launch_services; lastUpdated = Date()
         }
     }
 
@@ -247,7 +315,7 @@ final class RuntimeModel: ObservableObject {
         perform { try await self.post("api/runtime/services/\(service.id)/\(action)"); await self.refresh() }
     }
     private func post(_ path: String, body: [String: Any] = [:]) async throws {
-        guard snapshot?.instance == instance else { throw NSError(domain: "MissionControl", code: 1, userInfo: [NSLocalizedDescriptionKey: "Managed runtime is not connected."]) }
+        guard snapshot != nil, attached || snapshot?.instance == instance else { throw NSError(domain: "MissionControl", code: 1, userInfo: [NSLocalizedDescriptionKey: "Managed runtime is not connected."]) }
         var request = URLRequest(url: url.appendingPathComponent(path)); request.httpMethod = "POST"; request.timeoutInterval = 50
         request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await URLSession.shared.data(for: request)
