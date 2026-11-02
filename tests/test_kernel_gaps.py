@@ -3136,7 +3136,8 @@ def test_an_answer_owed_is_still_owed_in_a_later_run(isolated, monkeypatch):
         release.set()
         await until(lambda: store.reports_of(row["id"]))
         assert store.reports_of(row["id"])[0]["status"] == "failed"
-        assert runtime_store.mission_get(mission["id"])["status"] == "failed"
+        # The report is filed first and the task's status follows a few steps later.
+        await until(lambda: runtime_store.mission_get(mission["id"])["status"] == "failed")
         await wind_down(o)
     asyncio.run(main())
 
