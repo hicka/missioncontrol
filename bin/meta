@@ -1,0 +1,482 @@
+#!/usr/bin/env python3
+from pathlib import Path
+USAGE = """meta: thin CLI over the Meta Graph API for posting to your Facebook
+Page and Instagram account.
+
+Commands:
+  meta check                         confirm the token, Page and Instagram account
+  meta posts [n]                     recent Facebook and Instagram posts (default 5)
+  meta post <image> (--caption TEXT | --caption-file F) [--only fb|ig] [--dry-run]
+                                     publish one feed image with its caption
+  meta video <file.mp4> (--caption TEXT | --caption-file F) [--only fb|ig] [--dry-run]
+                                     publish a video: a Page video on Facebook, a Reel on
+                                     Instagram (vertical 9:16 is what Reels expect)
+
+Reads META_PAGE_ID and META_PAGE_TOKEN (and optionally META_IG_USER_ID,
+META_GRAPH_VERSION) from the environment or the project .env. post and video are
+the only write actions. A PNG is converted to JPEG first (Instagram only takes
+JPEG), and the same file is never posted twice to the same platform: every post
+is recorded in meta_posts.jsonl next to the .env.
+"""
+import hashlib, json, mimetypes, os, shutil, struct, subprocess, sys, tempfile, time
+import urllib.error, urllib.parse, urllib.request, uuid
+
+ROOT = Path(__file__).resolve().parent.parent
+LEDGER = Path(os.environ.get("META_LEDGER") or ROOT / "meta_posts.jsonl")
+CAPTION_MAX, HASHTAGS_MAX = 2200, 30     # Instagram's limits; Facebook's are looser
+_dotenv = None
+
+
+def env(name, default=None):
+    global _dotenv
+    if os.environ.get(name):
+        return os.environ[name]
+    if _dotenv is None:
+        _dotenv = {}
+        try:
+            for line in open(os.environ.get("META_ENV_FILE") or ROOT / ".env"):
+                if "=" in line and not line.lstrip().startswith("#"):
+                    k, v = line.split("=", 1)
+                    _dotenv[k.strip()] = v.strip().strip('"').strip("'")
+        except FileNotFoundError:
+            pass
+    return _dotenv.get(name) or default
+
+
+def need(name):
+    value = env(name)
+    if not value:
+        sys.exit(f"{name} not found in the environment or project .env")
+    return value
+
+
+def base():
+    return (env("META_GRAPH_BASE", "https://graph.facebook.com").rstrip("/")
+            + "/" + env("META_GRAPH_VERSION", "v26.0"))
+
+
+def video_base():
+    """Facebook takes video uploads on its own host."""
+    if env("META_GRAPH_BASE"):
+        return base()
+    return "https://graph-video.facebook.com/" + env("META_GRAPH_VERSION", "v26.0")
+
+
+def call(method, path, fields=None, files=None, root=None):
+    """One Graph request. The token goes in a header so it never lands in a URL."""
+    url, data = (root or base()) + path, None
+    headers = {"Authorization": f"Bearer {need('META_PAGE_TOKEN')}",
+               "User-Agent": "missioncontrol-meta/1"}
+    if method == "GET" and fields:
+        url += "?" + urllib.parse.urlencode(fields)
+    elif files:
+        boundary = uuid.uuid4().hex
+        data = _multipart(boundary, fields or {}, files)
+        headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
+    elif fields:
+        data = urllib.parse.urlencode(fields).encode()
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            raw = r.read().decode()
+            return json.loads(raw) if raw.strip() else {}
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        try:
+            err = json.loads(body).get("error") or {}
+            detail = f"{err.get('message')} (code {err.get('code')}" + (
+                f", subcode {err['error_subcode']})" if err.get("error_subcode") else ")")
+        except ValueError:
+            detail = body[:200]
+        raise GraphError(f"Meta API {e.code} on {method} {path}: {detail}")
+    except urllib.error.URLError as e:
+        raise GraphError(f"Meta API unreachable on {method} {path}: {e.reason}")
+
+
+class GraphError(Exception):
+    pass
+
+
+def _multipart(boundary, fields, files):
+    out = []
+    for k, v in fields.items():
+        out += [f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n".encode(),
+                str(v).encode(), b"\r\n"]
+    for k, path in files.items():
+        ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        out += [f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"; "
+                f"filename=\"{Path(path).name}\"\r\nContent-Type: {ctype}\r\n\r\n".encode(),
+                Path(path).read_bytes(), b"\r\n"]
+    out.append(f"--{boundary}--\r\n".encode())
+    return b"".join(out)
+
+
+def ig_user():
+    """The Instagram account linked to the Page, unless one is set explicitly."""
+    explicit = env("META_IG_USER_ID")
+    if explicit:
+        return explicit
+    page = call("GET", f"/{need('META_PAGE_ID')}", {"fields": "instagram_business_account"})
+    found = (page.get("instagram_business_account") or {}).get("id")
+    if not found:
+        raise GraphError("the Page has no linked Instagram business account "
+                         "(link it in Meta Business Suite, or set META_IG_USER_ID)")
+    return found
+
+
+# ---- image checks -------------------------------------------------------------
+
+def image_size(path):
+    data = Path(path).read_bytes()
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return struct.unpack(">II", data[16:24])
+    if data[:2] == b"\xff\xd8":
+        i = 2
+        while i < len(data) - 9:
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            marker = data[i + 1]
+            if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                h, w = struct.unpack(">HH", data[i + 5:i + 9])
+                return w, h
+            i += 2 + struct.unpack(">H", data[i + 2:i + 4])[0]
+    raise SystemExit(f"{path}: not a PNG or JPEG image")
+
+
+def as_jpeg(path, workdir):
+    """Instagram's publishing API accepts JPEG only."""
+    if Path(path).read_bytes()[:2] == b"\xff\xd8":
+        return path
+    out = str(Path(workdir) / (Path(path).stem + ".jpg"))
+    if shutil.which("sips"):
+        r = subprocess.run(["sips", "-s", "format", "jpeg", "-s", "formatOptions", "92",
+                            path, "--out", out], capture_output=True, text=True)
+        if r.returncode == 0 and Path(out).exists():
+            return out
+    try:
+        from PIL import Image
+        Image.open(path).convert("RGB").save(out, "JPEG", quality=92)
+        return out
+    except ImportError:
+        sys.exit("cannot convert PNG to JPEG here: neither sips nor Pillow is available")
+
+
+def check_post(image, caption):
+    problems = []
+    w, h = image_size(image)
+    if not 0.8 <= w / h <= 1.91:
+        problems.append(f"image is {w}x{h}; Instagram feed needs an aspect ratio between "
+                        "4:5 and 1.91:1 (use 1080x1350 or 1080x1080)")
+    if w < 320:
+        problems.append(f"image is only {w}px wide; use 1080px")
+    if Path(image).stat().st_size > 8 * 1024 * 1024:
+        problems.append("image is over Instagram's 8 MB limit")
+    if not caption.strip():
+        problems.append("caption is empty")
+    if len(caption) > CAPTION_MAX:
+        problems.append(f"caption is {len(caption)} characters; the limit is {CAPTION_MAX}")
+    if caption.count("#") > HASHTAGS_MAX:
+        problems.append(f"caption has more than {HASHTAGS_MAX} hashtags")
+    return (w, h), problems
+
+
+# ---- ledger -------------------------------------------------------------------
+
+def digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def already_posted(sha):
+    done = {}
+    try:
+        for line in LEDGER.read_text().splitlines():
+            row = json.loads(line)
+            if row.get("sha256") == sha:
+                done[row["platform"]] = row
+    except (FileNotFoundError, ValueError):
+        pass
+    return done
+
+
+def record(sha, image, platform, post_id, link):
+    with open(LEDGER, "a") as f:
+        f.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "sha256": sha,
+                            "image": str(Path(image).resolve()), "platform": platform,
+                            "id": post_id, "permalink": link}) + "\n")
+
+
+# ---- commands -----------------------------------------------------------------
+
+def cmd_check(a):
+    page = call("GET", f"/{need('META_PAGE_ID')}",
+                {"fields": "name,link,instagram_business_account{username}"})
+    print(f"facebook page: {page.get('name')} ({page.get('id')}) {page.get('link') or ''}".rstrip())
+    ig = page.get("instagram_business_account") or {}
+    if env("META_IG_USER_ID"):
+        ig = call("GET", f"/{env('META_IG_USER_ID')}", {"fields": "username"})
+    if ig.get("id"):
+        print(f"instagram: @{ig.get('username')} ({ig.get('id')})")
+    else:
+        print("instagram: no business account linked to this Page")
+        sys.exit(1)
+
+
+def cmd_posts(a):
+    n = int(a[0]) if a and a[0].isdigit() else 5
+    fb = call("GET", f"/{need('META_PAGE_ID')}/posts",
+              {"fields": "created_time,message,permalink_url", "limit": n})
+    for p in fb.get("data", []):
+        print(f"facebook | {p.get('created_time', '')[:16]} | "
+              f"{(p.get('message') or '').splitlines()[0][:60] if p.get('message') else ''} | "
+              f"{p.get('permalink_url', '')}")
+    ig = call("GET", f"/{ig_user()}/media",
+              {"fields": "timestamp,caption,permalink", "limit": n})
+    for m in ig.get("data", []):
+        print(f"instagram | {m.get('timestamp', '')[:16]} | "
+              f"{(m.get('caption') or '').splitlines()[0][:60] if m.get('caption') else ''} | "
+              f"{m.get('permalink', '')}")
+
+
+def _flag(a, name):
+    if name in a:
+        i = a.index(name)
+        if i + 1 >= len(a):
+            sys.exit(f"{name} needs a value")
+        return a[i + 1]
+    return None
+
+
+def _largest_image(photo_id):
+    photo = call("GET", f"/{photo_id}", {"fields": "images"})
+    images = sorted(photo.get("images") or [], key=lambda i: i.get("width", 0), reverse=True)
+    if not images:
+        raise GraphError(f"photo {photo_id} has no image URL to hand to Instagram")
+    return images[0]["source"]
+
+
+def _post_instagram(ig, image_url, caption):
+    container = call("POST", f"/{ig}/media", {"image_url": image_url, "caption": caption})["id"]
+    for _ in range(30):
+        status = call("GET", f"/{container}", {"fields": "status_code"}).get("status_code")
+        if status == "FINISHED":
+            break
+        if status in ("ERROR", "EXPIRED"):
+            raise GraphError(f"Instagram could not process the image (container {status})")
+        time.sleep(2)
+    else:
+        raise GraphError("Instagram was still processing the image after 60s; nothing published")
+    media = call("POST", f"/{ig}/media_publish", {"creation_id": container})["id"]
+    link = call("GET", f"/{media}", {"fields": "permalink"}).get("permalink", "")
+    return media, link
+
+
+def _publish_args(a, kind):
+    """The file, its caption and which platforms, shared by post and video."""
+    if not a or a[0].startswith("--"):
+        sys.exit(f"usage: meta {kind} <file> (--caption TEXT | --caption-file F) [--only fb|ig] [--dry-run]")
+    path = os.path.expanduser(a[0])
+    if not Path(path).is_file():
+        sys.exit(f"{path}: no such file")
+    caption, caption_file = _flag(a, "--caption"), _flag(a, "--caption-file")
+    if caption_file:
+        caption = Path(os.path.expanduser(caption_file)).read_text().strip()
+    if caption is None:
+        sys.exit("give the caption with --caption or --caption-file")
+    only = _flag(a, "--only")
+    if only not in (None, "fb", "ig"):
+        sys.exit("--only takes fb or ig")
+    return path, caption, [p for p in ("facebook", "instagram") if not only or p.startswith(only[0])]
+
+
+def _skip_done(sha, wanted, what):
+    done = already_posted(sha)
+    for platform in [p for p in wanted if p in done]:
+        print(f"{platform}: already posted this {what} on {done[platform]['ts'][:10]} "
+              f"{done[platform]['permalink']} (skipped)")
+    return [p for p in wanted if p not in done]
+
+
+def _fail(failed):
+    if failed:
+        print("\n".join(failed))
+        retry = [f.split(":")[0] for f in failed]
+        print(f"retry only what failed with --only {'fb' if retry == ['facebook'] else 'ig'}"
+              if len(retry) == 1 else "nothing was posted")
+        sys.exit(1)
+
+
+def cmd_post(a):
+    image, caption, wanted = _publish_args(a, "post")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        jpeg = as_jpeg(image, tmp)
+        (w, h), problems = check_post(jpeg, caption)
+        if problems:
+            sys.exit("not posted:\n  " + "\n  ".join(problems))
+        sha = digest(image)
+        wanted = _skip_done(sha, wanted, "image")
+        if not wanted:
+            return
+        if "--dry-run" in a:
+            print(f"dry run: would post {w}x{h} JPEG to {' and '.join(wanted)} "
+                  f"with a {len(caption)}-character caption:\n\n{caption}")
+            return
+
+        page, ig = need("META_PAGE_ID"), None
+        if "instagram" in wanted:
+            ig = ig_user()      # fail before anything is published, not halfway through
+        failed, photo_id = [], None
+        if "facebook" in wanted:
+            try:
+                res = call("POST", f"/{page}/photos", {"message": caption}, {"source": jpeg})
+                photo_id = res["id"]
+                post_id = res.get("post_id") or photo_id
+                link = call("GET", f"/{post_id}", {"fields": "permalink_url"}).get("permalink_url", "")
+                record(sha, image, "facebook", post_id, link)
+                print(f"facebook: posted {link or post_id}")
+            except (GraphError, KeyError) as e:
+                failed.append(f"facebook: NOT posted: {e}")
+        if "instagram" in wanted:
+            try:
+                # Instagram fetches the image from a public URL rather than taking an
+                # upload. Meta's own CDN copy of the Page photo is that URL; when there
+                # is no Facebook post, an unpublished Page photo hosts it instead.
+                if not photo_id:
+                    photo_id = call("POST", f"/{page}/photos", {"published": "false"},
+                                    {"source": jpeg})["id"]
+                media, link = _post_instagram(ig, _largest_image(photo_id), caption)
+                record(sha, image, "instagram", media, link)
+                print(f"instagram: posted {link or media}")
+            except (GraphError, KeyError) as e:
+                failed.append(f"instagram: NOT posted: {e}")
+        _fail(failed)
+
+
+# ---- video ----------------------------------------------------------------------
+
+VIDEO_MAX_BYTES, VIDEO_SECONDS = 300 * 1024 * 1024, (3, 900)   # Reels limits, kept conservative
+
+
+def probe_video(path):
+    """Duration and size from ffprobe, or None when ffprobe is not installed."""
+    if os.environ.get("META_FFPROBE") == "none" or not shutil.which("ffprobe"):
+        return None
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=width,height:format=duration", "-of", "json", path],
+                       capture_output=True, text=True)
+    try:
+        info = json.loads(r.stdout)
+        stream = info["streams"][0]
+        return float(info["format"]["duration"]), int(stream["width"]), int(stream["height"])
+    except (ValueError, KeyError, IndexError):
+        raise SystemExit(f"{path}: ffprobe cannot read it as a video")
+
+
+def check_video(path, caption):
+    problems = []
+    data = Path(path).read_bytes()[:12]
+    if data[4:8] != b"ftyp":
+        problems.append("not an MP4 file")
+    if Path(path).stat().st_size > VIDEO_MAX_BYTES:
+        problems.append("video is over 300 MB")
+    probed = probe_video(path) if not problems else None
+    if probed:
+        secs, w, h = probed
+        if not VIDEO_SECONDS[0] <= secs <= VIDEO_SECONDS[1]:
+            problems.append(f"video is {secs:.1f}s; Reels take 3s to 15 min")
+    if not caption.strip():
+        problems.append("caption is empty")
+    if len(caption) > CAPTION_MAX:
+        problems.append(f"caption is {len(caption)} characters; the limit is {CAPTION_MAX}")
+    if caption.count("#") > HASHTAGS_MAX:
+        problems.append(f"caption has more than {HASHTAGS_MAX} hashtags")
+    return probed, problems
+
+
+def _upload_reel(uri, path):
+    """Instagram's resumable upload: the bytes go straight to Meta, so no public URL is needed."""
+    size = Path(path).stat().st_size
+    req = urllib.request.Request(uri, data=Path(path).read_bytes(), method="POST", headers={
+        "Authorization": f"OAuth {need('META_PAGE_TOKEN')}", "offset": "0", "file_size": str(size),
+        "Content-Type": "application/octet-stream", "User-Agent": "missioncontrol-meta/1"})
+    try:
+        with urllib.request.urlopen(req, timeout=600) as r:
+            body = json.loads(r.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        raise GraphError(f"Instagram upload {e.code}: {e.read().decode(errors='replace')[:200]}")
+    except urllib.error.URLError as e:
+        raise GraphError(f"Instagram upload unreachable: {e.reason}")
+    if not body.get("success"):
+        raise GraphError(f"Instagram upload was not accepted: {str(body)[:200]}")
+
+
+def _post_reel(ig, path, caption):
+    res = call("POST", f"/{ig}/media", {"media_type": "REELS", "upload_type": "resumable",
+                                        "caption": caption, "share_to_feed": "true"})
+    container, uri = res["id"], res["uri"]
+    _upload_reel(uri, path)
+    for _ in range(120):
+        status = call("GET", f"/{container}", {"fields": "status_code,status"})
+        if status.get("status_code") == "FINISHED":
+            break
+        if status.get("status_code") in ("ERROR", "EXPIRED"):
+            raise GraphError(f"Instagram could not process the video: {status.get('status') or status.get('status_code')}")
+        time.sleep(5)
+    else:
+        raise GraphError("Instagram was still processing the video after 10 min; nothing published")
+    media = call("POST", f"/{ig}/media_publish", {"creation_id": container})["id"]
+    link = call("GET", f"/{media}", {"fields": "permalink"}).get("permalink", "")
+    return media, link
+
+
+def cmd_video(a):
+    path, caption, wanted = _publish_args(a, "video")
+    probed, problems = check_video(path, caption)
+    if problems:
+        sys.exit("not posted:\n  " + "\n  ".join(problems))
+    sha = digest(path)
+    wanted = _skip_done(sha, wanted, "video")
+    if not wanted:
+        return
+    if "--dry-run" in a:
+        shape = f"{probed[1]}x{probed[2]}, {probed[0]:.1f}s " if probed else ""
+        print(f"dry run: would post the {shape}video to {' and '.join(wanted)} "
+              f"(a Reel on Instagram) with a {len(caption)}-character caption:\n\n{caption}")
+        return
+
+    page, ig = need("META_PAGE_ID"), None
+    if "instagram" in wanted:
+        ig = ig_user()      # fail before anything is published, not halfway through
+    failed = []
+    if "facebook" in wanted:
+        try:
+            vid = call("POST", f"/{page}/videos", {"description": caption}, {"source": path},
+                       root=video_base())["id"]
+            link = call("GET", f"/{vid}", {"fields": "permalink_url"}).get("permalink_url", "")
+            if link.startswith("/"):
+                link = "https://www.facebook.com" + link
+            record(sha, path, "facebook", vid, link)
+            print(f"facebook: posted {link or vid}")
+        except (GraphError, KeyError) as e:
+            failed.append(f"facebook: NOT posted: {e}")
+    if "instagram" in wanted:
+        try:
+            media, link = _post_reel(ig, path, caption)
+            record(sha, path, "instagram", media, link)
+            print(f"instagram: posted {link or media}")
+        except (GraphError, KeyError) as e:
+            failed.append(f"instagram: NOT posted: {e}")
+    _fail(failed)
+
+
+CMDS = {"check": cmd_check, "posts": cmd_posts, "post": cmd_post, "video": cmd_video}
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
+        sys.exit("meta: unknown command %r\n\n%s" % (sys.argv[1:2], USAGE))
+    try:
+        CMDS[sys.argv[1]](sys.argv[2:])
+    except GraphError as e:
+        sys.exit(str(e))

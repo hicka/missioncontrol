@@ -1,0 +1,18 @@
+# One Mission Control instance, hardened. For a per-user fleet, stamp one
+# of these per customer with its own volume, token, and subdomain route.
+services:
+  missioncontrol:
+    build: .
+    ports:
+      - "8899:8899"
+    volumes:
+      - ./data:/data
+    environment:
+      MC_API_TOKEN: "change-me-long-random"
+    mem_limit: 512m
+    cpus: 1.0
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped

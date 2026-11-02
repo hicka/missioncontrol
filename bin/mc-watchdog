@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Keeps Mission Control alive from outside it.
+
+server/watchdog.py checks the agent's work, but it shares a process with what it
+watches, so it cannot see that process wedge: the port still accepts connections
+and launchd sees nothing wrong. This runs separately, with no imports from the app
+and no model, and asks one question on a schedule: does it still answer? When it
+stops answering it gets restarted, and when restarts stop helping this tells the
+owner once and backs off, because a restart loop is worse than being down.
+
+`mc-watchdog --once` asks once and says what it found in its exit code: 0 all is well,
+1 it is not answering and a restart may help, 2 it is answering but part of it reports
+a problem that a restart would not fix, so it needs a person.
+
+Standard library only, and it runs on the system Python, which is older than the
+app's. Install: packaging/macos/install-watchdog
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+FAILS_BEFORE_RESTART = 3
+RESTART_COOLDOWN = 300     # let a slow boot finish before judging it again
+MAX_RESTARTS_PER_HOUR = 3
+EXPO_PUSH = "https://exp.host/--/api/v2/push/send"
+OK, RESTART_MAY_HELP, NEEDS_A_PERSON = 0, 1, 2
+
+log = logging.getLogger("mc-watchdog")
+
+
+def probe(url: str, timeout: float = 10.0) -> str | None:
+    """None when healthy, otherwise what is wrong. A service that is deliberately
+    stopped refuses the connection, which the caller treats differently."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as reply:
+            body = json.load(reply)
+    except urllib.error.HTTPError as exc:
+        return f"HTTP {exc.code}"
+    except OSError as exc:
+        return f"no answer: {getattr(exc, 'reason', exc)}"
+    except ValueError:
+        return "unreadable answer"
+    if not body.get("ok"):
+        return "reported not ok"
+    if body.get("router_alive") is False:
+        return "the Router loop is not running"
+    return None
+
+
+def needs_a_person(url: str, timeout: float = 10.0) -> str | None:
+    """What it reports as wrong while still answering, which a restart would not fix."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as reply:
+            problems = json.load(reply).get("problems") or []
+    except (OSError, ValueError):
+        return None
+    return "; ".join(str(p) for p in problems) or None
+
+
+def status(url: str) -> int:
+    problem = probe(url)
+    if problem:
+        print(f"not answering: {problem}")
+        return RESTART_MAY_HELP
+    trouble = needs_a_person(url)
+    if trouble:
+        print(f"running, with problems: {trouble}")
+        return NEEDS_A_PERSON
+    print("ok")
+    return OK
+
+
+def tell_the_owner(text: str, home: str = "") -> None:
+    """The app is what normally does this and it is down, so this reaches for what does
+    not need it: their phones, from the app's own device list, and this Mac's screen."""
+    devices = Path(home or os.environ.get("MISSIONCONTROL_HOME") or Path(__file__).resolve().parent.parent) / "devices.json"
+    try:
+        tokens = [d["token"] for d in json.loads(devices.read_text())]
+        if tokens:
+            body = json.dumps([{"to": t, "title": "Mission Control is down", "body": text[:300], "sound": "default"}
+                               for t in tokens]).encode()
+            request = urllib.request.Request(EXPO_PUSH, body, {"Content-Type": "application/json",
+                                                               "Accept": "application/json"})
+            urllib.request.urlopen(request, timeout=15).close()
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        log.warning("could not push to the phone: %s", exc)
+    if sys.platform == "darwin":
+        script = f'display notification {json.dumps(text[:200])} with title "Mission Control is down"'
+        subprocess.run(["osascript", "-e", script], capture_output=True, check=False)
+
+
+def service_loaded(label: str) -> bool:
+    """launchd is the owner's switch. If they booted the service out, it stays out."""
+    domain = f"gui/{os.getuid()}/{label}"
+    return subprocess.run(["launchctl", "print", domain], capture_output=True).returncode == 0
+
+
+def restart(label: str) -> bool:
+    domain = f"gui/{os.getuid()}/{label}"
+    done = subprocess.run(["launchctl", "kickstart", "-k", domain], capture_output=True, text=True)
+    if done.returncode:
+        log.error("restart failed: %s", done.stderr.strip())
+    return done.returncode == 0
+
+
+class Decider:
+    """The logic, apart from the side effects, so every case can be tested."""
+    def __init__(self):
+        self.fails, self.restarts, self.last_restart, self.gave_up = 0, [], 0.0, False
+
+    def observe(self, problem: str | None, loaded: bool, now: float) -> str:
+        """Returns ok, wait, restart or give_up."""
+        if not loaded:
+            self.fails = 0
+            return "ok"
+        if problem is None:
+            self.fails, self.gave_up = 0, False
+            return "ok"
+        self.fails += 1
+        if self.fails < FAILS_BEFORE_RESTART or now - self.last_restart < RESTART_COOLDOWN:
+            return "wait"
+        self.restarts = [t for t in self.restarts if now - t < 3600]
+        if len(self.restarts) >= MAX_RESTARTS_PER_HOUR:
+            first = not self.gave_up
+            self.gave_up = True
+            return "give_up" if first else "wait"
+        self.restarts.append(now)
+        self.last_restart, self.fails = now, 0
+        return "restart"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--url", default=os.environ.get("MC_HEALTH_URL", "http://127.0.0.1:8899/api/health"))
+    parser.add_argument("--label", default="com.missioncontrol")
+    parser.add_argument("--every", type=float, default=60.0)
+    parser.add_argument("--once", action="store_true", help="check once and answer in the exit code")
+    args = parser.parse_args()
+    if args.once:
+        return status(args.url)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    log.info("watching %s (service %s)", args.url, args.label)
+    decider = Decider()
+    while True:
+        problem = probe(args.url)
+        verdict = decider.observe(problem, service_loaded(args.label), time.time())
+        if verdict == "restart":
+            log.warning("%s; restarting %s", problem, args.label)
+            restart(args.label)
+        elif verdict == "give_up":
+            log.error("%s, and %d restarts in the last hour did not help. Leaving it down.",
+                      problem, MAX_RESTARTS_PER_HOUR)
+            tell_the_owner(f"{problem}. {MAX_RESTARTS_PER_HOUR} restarts in the last hour did not help, "
+                           "so it needs a person.")
+        elif problem and verdict == "wait":
+            log.info("%s (%d in a row)", problem, decider.fails)
+        time.sleep(args.every)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,51 @@
+# Secrets and per-user configuration: never commit these
+.env
+settings.yaml
+agents.yaml
+agents.local.yaml
+
+# Runtime state and data
+missioncontrol.db
+missioncontrol.db-*
+github_state.json
+meta_posts.jsonl
+browser-profile/
+*.log
+devices.json
+heartbeat.last
+brief.last
+mail_sweep.json
+runtime.lock
+
+# Stray Node deps (server is Python; not part of the app)
+node_modules/
+package.json
+package-lock.json
+# ...except the self-hosted Laya service, which is Node by design
+!laya/package.json
+!laya/package-lock.json
+# ...and the WhatsApp bridge
+!whatsapp/package.json
+!whatsapp/package-lock.json
+
+# Environment
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+*.bak
+
+# Desktop build output
+dist/
+build/
+*.spec
+!packaging/macos/backend.spec
+
+# Learned team knowledge (per-install data)
+skills/
+uploads/
+whatsapp_media/
+
+# Local credentials store (never commit)
+secrets/

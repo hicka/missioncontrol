@@ -1,0 +1,97 @@
+name: Build desktop apps
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# gh release upload needs write access to the release; the default token is read-only.
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pytest
+      - run: python -m pytest tests/ -q
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            sep: ":"
+            icon: assets/app.icns
+            artifact: MissionControl-macOS
+          - os: windows-latest
+            sep: ";"
+            icon: assets/app.ico
+            artifact: MissionControl-Windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements-desktop.txt
+      - name: Build native macOS app
+        if: runner.os == 'macOS'
+        run: python scripts/build_macos.py
+      - name: Build Windows app
+        if: runner.os == 'Windows'
+        run: >
+          pyinstaller --noconfirm --windowed --name "Mission Control"
+          --paths server
+          --icon "${{ matrix.icon }}"
+          --add-data "web${{ matrix.sep }}web"
+          --add-data "assets${{ matrix.sep }}assets"
+          --add-data "bundled_skills${{ matrix.sep }}bundled_skills"
+          --add-data "agents.example.yaml${{ matrix.sep }}."
+          --add-data "settings.example.yaml${{ matrix.sep }}."
+          --collect-submodules channels
+          --collect-submodules pystray
+          desktop.py
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --sequesterRsrc --keepParent "dist/native/Mission Control.app" "${{ matrix.artifact }}.zip"
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "dist/Mission Control" -DestinationPath "${{ matrix.artifact }}.zip" -Force
+      - name: Installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ver = if ($env:GITHUB_REF -like 'refs/tags/*') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '1.0.0' }
+          choco install innosetup --no-progress -y
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=$ver" "packaging\windows\installer.iss"
+          Copy-Item "MissionControl-Setup.exe" "MissionControl-Windows-Setup.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.zip
+      - name: Upload installer (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MissionControl-Windows-Setup
+          path: MissionControl-Windows-Setup.exe
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" "${{ matrix.artifact }}.zip" --clobber
+      - name: Attach installer to release (Windows)
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" "MissionControl-Windows-Setup.exe" --clobber

@@ -1,0 +1,366 @@
+#!/usr/bin/env python3
+from pathlib import Path
+USAGE = """forge: thin CLI over the Laravel Forge API for Mission Control's servers.
+
+Commands:
+  forge orgs                                   organizations the key can see
+  forge servers                                id | name | type | ip | php | ubuntu | connection
+  forge server <server>                        one server in detail
+  forge sites <server>                         id | name | status | repo@branch | deploys via | url
+  forge processes <server>                     background processes (id | status | command)
+  forge events <server>                        recent server events
+  forge logs <server> [nginx-error|nginx-access|php] [--lines N]
+                                               tail of a server log (default nginx-error)
+  forge site-log <server> <site> [application|nginx-error|nginx-access] [--lines N]
+                                               tail of a site log (default application)
+  forge restart <server> nginx|php|mysql|postgres
+                                               restart one service on the server
+  forge restart-process <server> <process_id>  restart one background process
+  forge restart-server <server>                restart the whole machine (down a minute or two)
+  forge php <server>                           installed PHP versions and their status
+  forge update-php <server> [8.3]              update PHP to its latest patch release
+                                               (default: the server's own version)
+
+<server> is an id or a name (quiet-dawn); <site> is an id or a domain.
+--org SLUG picks the organization. FORGE_ORG in .env sets a default; a key that
+sees only one organization needs neither.
+
+Reads FORGE_API_KEY from the environment or the project .env. restart,
+restart-process, restart-server and update-php are the only write actions. The
+sites deploy through Envoyer (bin/envoyer), so this CLI does not deploy.
+"""
+import json, os, re, sys, time, urllib.error, urllib.parse, urllib.request
+
+ROOT = Path(__file__).resolve().parent.parent
+SERVICES = ("nginx", "php", "mysql", "postgres")
+SERVER_LOGS = ("nginx-error", "nginx-access", "php")
+SITE_LOGS = ("application", "nginx-error", "nginx-access")
+# Forge's edge answers 502 and 504 while its app is slow, and a read is safe to
+# ask again. A write goes out once: a 502 there may still have restarted something.
+RETRY_CODES = (429, 500, 502, 503, 504)
+RETRY_WAITS = (2, 5)
+_dotenv = None
+
+
+def env(name, default=None):
+    global _dotenv
+    if os.environ.get(name):
+        return os.environ[name]
+    if _dotenv is None:
+        _dotenv = {}
+        try:
+            for line in open(os.environ.get("FORGE_ENV_FILE") or ROOT / ".env"):
+                if "=" in line and not line.lstrip().startswith("#"):
+                    k, v = line.split("=", 1)
+                    _dotenv[k.strip()] = v.strip().strip('"').strip("'")
+        except FileNotFoundError:
+            pass
+    return _dotenv.get(name) or default
+
+
+def call(method, path, body=None):
+    key = env("FORGE_API_KEY")
+    if not key:
+        sys.exit("FORGE_API_KEY not found in the environment or project .env")
+    req = urllib.request.Request(
+        env("FORGE_API_BASE", "https://forge.laravel.com/api").rstrip("/") + path,
+        method=method, data=json.dumps(body).encode() if body is not None else None,
+        headers={"Accept": "application/json", "Content-Type": "application/json",
+                 "User-Agent": "curl/8.4.0"})
+    # Unredirected: a redirect to another host must never carry the key.
+    req.add_unredirected_header("Authorization", f"Bearer {key}")
+    waits = list(RETRY_WAITS) if method == "GET" else []
+    while True:
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                raw = r.read().decode(errors="replace")
+            break
+        except urllib.error.HTTPError as e:
+            if e.code in RETRY_CODES and waits:
+                time.sleep(waits.pop(0))
+                continue
+            maybe = (" It may still have gone through: `forge events <server>` shows what ran."
+                     if method != "GET" and e.code >= 500 else "")
+            sys.exit(f"Forge API {e.code} on {method} {path}: {reason(e.code, e.read())}{maybe}")
+        except (urllib.error.URLError, TimeoutError) as e:
+            if waits:
+                time.sleep(waits.pop(0))
+                continue
+            sys.exit(f"Forge API unreachable: {getattr(e, 'reason', e)}")
+    if not raw.strip():
+        return {}
+    try:
+        return json.loads(raw)
+    except ValueError:
+        sys.exit(f"Forge API sent a web page instead of JSON for {method} {path}")
+
+
+def reason(code, raw):
+    text = raw.decode(errors="replace").strip()
+    try:
+        data = json.loads(text)
+        text = data.get("message") or data.get("detail") or data.get("title") or text
+    except ValueError:
+        if text.startswith("<"):
+            text = "a web page instead of JSON"   # never echo it: it can carry account details
+    if code == 401:
+        text += (" (the key was refused, or the path does not exist: Forge answers 401 for"
+                 " both. Every resource lives under /orgs/<slug>/...)")
+    return text[:300]
+
+
+def collect(path):
+    """Every item of a paginated list, following Forge's cursors."""
+    items, cursor = [], None
+    for _ in range(20):
+        query = "page[size]=100" + (f"&page[cursor]={urllib.parse.quote(cursor)}" if cursor else "")
+        data = call("GET", f"{path}{'&' if '?' in path else '?'}{query}")
+        items += data.get("data") or []
+        cursor = (data.get("meta") or {}).get("next_cursor")
+        if not cursor:
+            break
+    return items
+
+
+def organization(flag):
+    slug = flag or env("FORGE_ORG")
+    if not slug:
+        orgs = collect("/orgs")
+        if len(orgs) != 1:
+            sys.exit("this key sees %d organizations; pick one with --org SLUG or FORGE_ORG"
+                     " in .env:\n%s" % (len(orgs), "\n".join(
+                         f"  {o['attributes'].get('slug')} | {o['attributes'].get('name')}"
+                         for o in orgs)))
+        slug = orgs[0]["attributes"]["slug"]
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", slug):
+        sys.exit(f"bad organization slug {slug!r}")
+    return slug
+
+
+def server_id(org, ref):
+    if ref.isdigit():
+        return ref
+    for s in collect(f"/orgs/{org}/servers"):
+        a = s["attributes"]
+        if ref.lower() in (str(a.get("name")).lower(), str(a.get("slug")).lower()):
+            return str(s["id"])
+    sys.exit(f"no server named {ref!r}; `forge servers` lists them")
+
+
+def site_id(org, sid, ref):
+    if ref.isdigit():
+        return ref
+    want = ref.lower().removeprefix("https://").removeprefix("http://").rstrip("/")
+    for s in collect(f"/orgs/{org}/servers/{sid}/sites"):
+        a = s["attributes"]
+        url = str(a.get("url") or "").split("://")[-1].rstrip("/")
+        if want in [str(a.get("name")).lower(), url.lower()] + [x.lower() for x in a.get("aliases") or []]:
+            return str(s["id"])
+    sys.exit(f"no site {ref!r} on server {sid}; `forge sites {sid}` lists them")
+
+
+def row(*cells):
+    print(" | ".join("-" if c in (None, "") else str(c) for c in cells))
+
+
+def tail(text, lines):
+    text = (text or "").rstrip("\n")
+    if not text:
+        print("(empty)")
+        return
+    rows = text.split("\n")
+    if len(rows) > lines:
+        print(f"... last {lines} of {len(rows)} lines")
+    print("\n".join(rows[-lines:]))
+
+
+def cmd_orgs(org_flag, a, lines):
+    for o in collect("/orgs"):
+        row(o["attributes"].get("slug"), o["attributes"].get("name"))
+
+
+def cmd_servers(org_flag, a, lines):
+    org = organization(org_flag)
+    for s in collect(f"/orgs/{org}/servers"):
+        x = s["attributes"]
+        row(s["id"], x.get("name"), x.get("type"), x.get("ip_address"), x.get("php_version"),
+            f"ubuntu {x.get('ubuntu_version')}", x.get("connection_status"),
+            "ready" if x.get("is_ready") else "not ready")
+
+
+SERVER_FIELDS = ("name", "type", "provider", "region", "size", "ip_address", "private_ip_address",
+                 "ubuntu_version", "php_version", "php_cli_version", "database_type", "db_status",
+                 "redis_status", "opcache_status", "connection_status", "is_ready", "revoked",
+                 "timezone", "created_at", "updated_at")
+
+
+def cmd_server(org_flag, a, lines):
+    org = organization(org_flag)
+    sid = server_id(org, a[0])
+    x = call("GET", f"/orgs/{org}/servers/{sid}").get("data", {}).get("attributes", {})
+    print(f"id: {sid}")
+    for k in SERVER_FIELDS:
+        print(f"{k}: {x.get(k)}")
+
+
+def cmd_sites(org_flag, a, lines):
+    org = organization(org_flag)
+    sid = server_id(org, a[0])
+    for s in collect(f"/orgs/{org}/servers/{sid}/sites"):
+        # deployment_url is a secret (it deploys without a key), so it is never printed
+        x = s["attributes"]
+        repo = x.get("repository") or {}
+        source = f"{repo.get('url')}@{repo.get('branch')}" if repo.get("url") else None
+        row(s["id"], x.get("name"), x.get("status"), source,
+            "envoyer" if x.get("uses_envoyer") else "forge", x.get("url"),
+            "maintenance on" if (x.get("maintenance_mode") or {}).get("enabled") else None)
+
+
+def cmd_processes(org_flag, a, lines):
+    org = organization(org_flag)
+    sid = server_id(org, a[0])
+    for p in collect(f"/orgs/{org}/servers/{sid}/background-processes"):
+        x = p["attributes"]
+        row(p["id"], x.get("status"), f"x{x.get('processes')}", x.get("directory"), x.get("command"))
+
+
+def cmd_events(org_flag, a, lines):
+    org = organization(org_flag)
+    sid = server_id(org, a[0])
+    data = call("GET", f"/orgs/{org}/servers/{sid}/events?page[size]=15").get("data") or []
+    if not data:
+        print("no recent events")
+    for e in data:
+        x = e["attributes"]
+        row(e["id"], x.get("created_at"), x.get("description"), x.get("ran_as"))
+
+
+def cmd_logs(org_flag, a, lines):
+    org = organization(org_flag)
+    sid = server_id(org, a[0])
+    kind = a[1] if len(a) > 1 else "nginx-error"
+    if kind not in SERVER_LOGS and not re.fullmatch(r"php\d{2}", kind):
+        sys.exit(f"server logs are {', '.join(SERVER_LOGS)}")
+    if kind == "php":
+        kind = call("GET", f"/orgs/{org}/servers/{sid}").get("data", {}).get(
+            "attributes", {}).get("php_version") or "php"
+    log = call("GET", f"/orgs/{org}/servers/{sid}/logs/{kind}")
+    tail(log.get("data", {}).get("attributes", {}).get("content"), lines)
+
+
+def cmd_site_log(org_flag, a, lines):
+    org = organization(org_flag)
+    sid = server_id(org, a[0])
+    site = site_id(org, sid, a[1])
+    kind = a[2] if len(a) > 2 else "application"
+    if kind not in SITE_LOGS:
+        sys.exit(f"site logs are {', '.join(SITE_LOGS)}")
+    log = call("GET", f"/orgs/{org}/servers/{sid}/sites/{site}/logs/{kind}")
+    tail(log.get("data", {}).get("attributes", {}).get("content"), lines)
+
+
+def cmd_restart(org_flag, a, lines):
+    if len(a) < 2 or a[1] not in SERVICES:
+        sys.exit(f"usage: forge restart <server> {'|'.join(SERVICES)}")
+    org = organization(org_flag)
+    sid = server_id(org, a[0])
+    body = {"action": "reboot"}    # Forge's word for restarting a service
+    if a[1] == "php":
+        body["version"] = call("GET", f"/orgs/{org}/servers/{sid}").get("data", {}).get(
+            "attributes", {}).get("php_version")
+    call("POST", f"/orgs/{org}/servers/{sid}/services/{a[1]}/actions", body)
+    print(f"restart of {a[1]} requested on server {sid}; `forge events {sid}` shows how it went")
+
+
+def cmd_restart_process(org_flag, a, lines):
+    if len(a) < 2 or not a[1].isdigit():
+        sys.exit("usage: forge restart-process <server> <process_id>")
+    org = organization(org_flag)
+    sid = server_id(org, a[0])
+    call("POST", f"/orgs/{org}/servers/{sid}/background-processes/{a[1]}/actions",
+         {"action": "restart"})
+    print(f"restart of background process {a[1]} requested on server {sid}")
+
+
+def cmd_restart_server(org_flag, a, lines):
+    org = organization(org_flag)
+    sid = server_id(org, a[0])
+    call("POST", f"/orgs/{org}/servers/{sid}/actions", {"action": "reboot"})
+    print(f"restart of server {sid} requested; it is unreachable for a minute or two."
+          f" `forge server {sid}` shows connection_status once it is back")
+
+
+def php_versions(org, sid):
+    return collect(f"/orgs/{org}/servers/{sid}/php/versions")
+
+
+def cmd_php(org_flag, a, lines):
+    org = organization(org_flag)
+    sid = server_id(org, a[0])
+    for v in php_versions(org, sid):
+        x = v["attributes"]
+        row(v["id"], x.get("version"), x.get("binary_name"), x.get("status"),
+            f"changed {x.get('updated_at')}")
+    print("Forge only knows the minor version; `php -v` on the server shows the patch level")
+
+
+def cmd_update_php(org_flag, a, lines):
+    org = organization(org_flag)
+    sid = server_id(org, a[0])
+    want = a[1] if len(a) > 1 else None
+    if want is None:
+        own = call("GET", f"/orgs/{org}/servers/{sid}").get("data", {}).get(
+            "attributes", {}).get("php_version") or ""        # php83
+        want = f"{own[3:-1]}.{own[-1]}" if re.fullmatch(r"php\d{2,3}", own) else ""
+    versions = {v["attributes"].get("version"): v for v in php_versions(org, sid)}
+    if want not in versions:
+        sys.exit(f"PHP {want or '?'} is not installed on server {sid}; installed: "
+                 f"{', '.join(sorted(map(str, versions))) or 'none'}")
+    v = versions[want]
+    if v["attributes"].get("status") != "installed":
+        sys.exit(f"PHP {want} on server {sid} is {v['attributes'].get('status')!r}, not installed;"
+                 " wait for that to finish first")
+    # Forge runs the update as a job: the 202 means queued, not done
+    call("PUT", f"/orgs/{org}/servers/{sid}/php/versions/{v['id']}")
+    print(f"update of PHP {want} to its latest patch requested on server {sid}; "
+          f"`forge php {sid}` shows its status while Forge works")
+
+
+# command -> (handler, how many positional arguments it needs)
+CMDS = {"orgs": (cmd_orgs, 0), "servers": (cmd_servers, 0), "server": (cmd_server, 1),
+        "sites": (cmd_sites, 1), "processes": (cmd_processes, 1), "events": (cmd_events, 1),
+        "logs": (cmd_logs, 1), "site-log": (cmd_site_log, 2), "restart": (cmd_restart, 2),
+        "restart-process": (cmd_restart_process, 2), "restart-server": (cmd_restart_server, 1),
+        "php": (cmd_php, 1), "update-php": (cmd_update_php, 1)}
+
+
+def main(argv):
+    org_flag, lines, args = None, 80, []
+    it = iter(argv)
+    for arg in it:
+        if arg == "--org":
+            org_flag = next(it, "")
+        elif arg.startswith("--org="):
+            org_flag = arg.split("=", 1)[1]
+        elif arg == "--lines":
+            value = next(it, "")
+            if not value.isdigit():
+                sys.exit("--lines needs a number")
+            lines = max(1, int(value))
+        else:
+            args.append(arg)
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(USAGE)
+        sys.exit(0 if args else 2)
+    if args[0] not in CMDS:
+        sys.exit("forge: unknown command %r\n\n%s" % (args[0], USAGE))
+    handler, needed = CMDS[args[0]]
+    if len(args) - 1 < needed:
+        usage = next((l.strip() for l in USAGE.splitlines()
+                      if l.strip().startswith(f"forge {args[0]} ")), USAGE)
+        sys.exit(f"usage: {usage}")
+    handler(org_flag, args[1:], lines)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

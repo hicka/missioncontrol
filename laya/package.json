@@ -1,0 +1,16 @@
+{
+  "name": "missioncontrol-laya",
+  "private": true,
+  "description": "Self-hosted Laya: a Jev-compatible /v1/systemone endpoint on localhost",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "fetch-model": "node -e \"import('@receptron/laya').then((m) => m.ensureBundle())\""
+  },
+  "dependencies": {
+    "@receptron/laya": "0.2.0"
+  }
+}

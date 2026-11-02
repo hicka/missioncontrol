@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>Mission Control</title>
+<link rel="icon" type="image/png" href="/static/logo.png">
+<script>
+  // Before first paint, so a light-mode owner never sees a dark flash.
+  try { const t = localStorage.getItem('mc-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
+</script>
+<link rel="stylesheet" href="/static/ui.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3.5 10.2 12 3.5l8.5 6.7V19a1.5 1.5 0 0 1-1.5 1.5h-4.2v-5.8H9.2v5.8H5A1.5 1.5 0 0 1 3.5 19z"/></symbol>
+    <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M3.5 13.5h4.8l1.4 2.8h4.6l1.4-2.8h4.8"/><path d="M6.3 5h11.4l2.8 8.5V18a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 18v-4.5z"/></symbol>
+    <symbol id="i-tasks" viewBox="0 0 24 24"><path d="m4 6.8 1.6 1.6L8.6 5.4M4 12.8l1.6 1.6 3-3M4 18.8l1.6 1.6 3-3M12 7h8M12 13h8M12 19h8"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4.5 18.5V5.8A2.3 2.3 0 0 1 6.8 3.5h12.7v13H6.8a2.3 2.3 0 0 0-2.3 2.3 2.2 2.2 0 0 0 2.3 2.2h12.7"/><path d="M8.5 7.5h7"/></symbol>
+    <symbol id="i-growth" viewBox="0 0 24 24"><path d="m3.5 16.5 5.5-5.5 4 4 7.5-7.5"/><path d="M15 7.5h5.5V13"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5.5M5.5 12 12 5.5l6.5 6.5"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/></symbol>
+    <symbol id="i-clip" viewBox="0 0 24 24"><path d="m20.5 11.5-8.3 8.3a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2.5"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4.5 19.5h4l10-10a2.8 2.8 0 0 0-4-4l-10 10z"/><path d="m13 7 4 4"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.5"/><path d="M3 19.5a6 6 0 0 1 12 0"/><path d="M16 5.5a3.5 3.5 0 0 1 0 6.5M18 14a6 6 0 0 1 3 5.5"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9.5 6 6 6-6 6"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5c.6 4.4 2.6 6.4 7 7-4.4.6-6.4 2.6-7 7-.6-4.4-2.6-6.4-7-7 4.4-.6 6.4-2.6 7-7z"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3.5 5 13.5h6l-1 7 8-10h-6z"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.5 5 6.2v5.6c0 4.4 3 7.6 7 8.7 4-1.1 7-4.3 7-8.7V6.2z"/></symbol>
+    <symbol id="i-term" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="m7.5 9.5 3 2.5-3 2.5M12.5 15h4"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.3 2.5 3.4 5.3 3.4 8.5s-1.1 6-3.4 8.5c-2.3-2.5-3.4-5.3-3.4-8.5s1.1-6 3.4-8.5z"/></symbol>
+    <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="7" cy="6" r="2"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="8" r="2"/><path d="M7 8v8M17 10c0 4-4 4-8.6 6.8"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M19.5 14.5A7.8 7.8 0 1 1 9.5 4.5a6.3 6.3 0 0 0 10 10z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.8"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/></symbol>
+    <symbol id="i-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.5 11.5a7.5 7.5 0 1 0-2.2 5.3"/><path d="M19.5 4.5v7h-7"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 16v5M8.5 3.5h7l-1 5.5 3.5 3.5V14h-12v-1.5L9.5 9z"/></symbol>
+    <symbol id="i-flask" viewBox="0 0 24 24"><path d="M9.5 3.5h5M10.5 3.5v5.8l-5.2 8.8a1.6 1.6 0 0 0 1.4 2.4h10.6a1.6 1.6 0 0 0 1.4-2.4l-5.2-8.8V3.5"/><path d="M7.6 15h8.8"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4.2M12 16.8v.2"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20.5 12a8 8 0 0 1-11.6 7.1L4 20l1-4.3A8 8 0 1 1 20.5 12z"/></symbol>
+    <symbol id="i-memory" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7.5" ry="2.8"/><path d="M4.5 6v6c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8V6M4.5 12v6c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8v-6"/></symbol>
+    <symbol id="i-lightbulb" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.7.6 1.1 1.4 1.1 2.2h5c0-.8.4-1.6 1.1-2.2A6 6 0 0 0 12 3z"/></symbol>
+  </defs>
+</svg>
+<div id="app">
+  <aside id="sidebar" aria-label="Navigation">
+    <div class="side-head">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="brand-name">Mission Control</span>
+      </div>
+      <button class="icon-btn side-close" id="side-close" aria-label="Close navigation"><svg class="i"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="side-actions">
+      <button class="new-task" id="new-task-btn"><svg class="i"><use href="#i-plus"/></svg><span>New task</span></button>
+      <button class="icon-btn side-search" id="palette-btn" aria-label="Search and commands" title="Search and commands"><svg class="i"><use href="#i-search"/></svg><kbd class="shortcut-key">⌘K</kbd></button>
+    </div>
+    <nav id="deck-nav" aria-label="Workspace">
+      <button data-deck="home" class="active"><svg class="i"><use href="#i-home"/></svg><span>Home</span></button>
+      <button data-deck="inbox"><svg class="i"><use href="#i-inbox"/></svg><span>Inbox</span><b id="nav-inbox-count" class="nav-count attention hidden">0</b></button>
+      <button data-deck="missions"><svg class="i"><use href="#i-tasks"/></svg><span>Tasks</span><b id="nav-mission-count" class="nav-count hidden">0</b></button>
+      <button data-deck="activity"><svg class="i"><use href="#i-bolt"/></svg><span>Activity</span><b id="nav-activity-count" class="nav-count hidden">0</b></button>
+      <button data-deck="schedule"><svg class="i"><use href="#i-clock"/></svg><span>Schedule</span><b id="nav-watch-count" class="nav-count hidden">0</b></button>
+      <button data-deck="knowledge"><svg class="i"><use href="#i-book"/></svg><span>Knowledge</span></button>
+      <button data-deck="evolution"><svg class="i"><use href="#i-growth"/></svg><span>Evolution</span><b id="nav-evolution-mark" class="nav-count hidden"></b></button>
+    </nav>
+    <div class="side-section">
+      <span>Team</span>
+      <button class="icon-btn new-chat" title="New agent" aria-label="Create agent"><svg class="i"><use href="#i-plus"/></svg></button>
+    </div>
+    <div class="search-wrap">
+      <svg class="i search-ico"><use href="#i-search"/></svg>
+      <input id="search" type="search" placeholder="Find a conversation" aria-label="Search conversations" autocomplete="off">
+    </div>
+    <nav id="convo-list" aria-label="Conversations"></nav>
+    <div class="side-foot">
+      <div class="profile">
+        <span class="profile-badge" id="profile-badge"></span>
+        <div class="profile-text"><span id="profile-name"></span><span id="link-dot">connecting</span></div>
+        <button class="icon-btn" id="theme-btn" aria-label="Theme" title="Theme"><svg class="i"><use href="#i-auto"/></svg></button>
+        <button class="icon-btn" id="settings-btn" aria-label="Settings" title="Settings"><svg class="i"><use href="#i-settings"/></svg><span id="settings-dot" class="side-dot hidden"></span></button>
+      </div>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <main id="control" aria-label="Workspace">
+    <header class="deck-header">
+      <button class="icon-btn menu-btn" data-menu aria-label="Open navigation"><svg class="i"><use href="#i-menu"/></svg></button>
+      <h1 id="deck-title" class="deck-title">Home</h1>
+      <div class="deck-header-right"><span class="conn" id="deck-connection"><i></i><span>Connecting</span></span></div>
+    </header>
+    <div id="deck-scroll"><div id="deck-content" aria-live="off"></div></div>
+  </main>
+
+  <main id="chat" class="hidden">
+    <div class="chat-main">
+      <header id="chat-header">
+        <button class="icon-btn menu-btn" data-menu aria-label="Open navigation"><svg class="i"><use href="#i-menu"/></svg></button>
+        <div class="header-id">
+          <span id="header-avatar"></span>
+          <div class="header-text">
+            <span id="header-name"></span>
+            <span id="header-status" class="st-text"></span>
+          </div>
+          <span id="header-badge" class="hidden" title="Responds to your iMessages"><svg class="i"><use href="#i-chat"/></svg>iMessage</span>
+        </div>
+        <div class="header-actions">
+          <button id="stop-btn" class="icon-btn danger hidden" title="Stop this agent" aria-label="Stop this agent"><svg class="i fill"><use href="#i-stop"/></svg></button>
+          <button id="voice-btn" class="icon-btn" title="Voice mode" aria-label="Voice mode"><svg class="i"><use href="#i-mic"/></svg></button>
+          <button id="edit-agent-btn" class="icon-btn hidden" title="Edit agent" aria-label="Edit agent"><svg class="i"><use href="#i-edit"/></svg></button>
+          <button id="panel-btn" class="icon-btn" title="Profile" aria-label="Show profile"><svg class="i"><use href="#i-panel"/></svg></button>
+        </div>
+      </header>
+      <div id="scroll"><div id="messages"></div></div>
+      <button id="to-latest" class="hidden" title="Jump to the latest messages">Latest <svg class="i"><use href="#i-up"/></svg></button>
+      <div id="voice-panel" class="hidden">
+        <div class="voice-orb-wrap"><div class="voice-ring"></div><div class="voice-orb" id="voice-orb"></div></div>
+        <div class="voice-text">
+          <div class="voice-title" id="voice-title">Voice mode</div>
+          <div class="voice-status" id="voice-status">Starting microphone…</div>
+        </div>
+        <label class="voice-check"><input type="checkbox" id="voice-handsfree" checked><span>Hands-free</span></label>
+        <button class="btn" id="voice-talk">Talk</button>
+        <button class="btn danger" id="voice-stop">Stop</button>
+        <button class="icon-btn" id="voice-close" title="Leave voice mode" aria-label="Leave voice mode"><svg class="i"><use href="#i-x"/></svg></button>
+      </div>
+      <footer id="composer">
+        <input type="file" id="file-input" multiple class="hidden">
+        <div class="input-pill">
+          <div id="pending-files" class="hidden"></div>
+          <textarea id="input" rows="1" placeholder="Message"></textarea>
+          <div class="input-row">
+            <button class="icon-btn" id="attach-btn" title="Attach a file" aria-label="Attach a file"><svg class="i"><use href="#i-clip"/></svg></button>
+            <span class="input-hint">Enter to send · Shift Enter for a new line</span>
+            <button class="icon-btn" id="mic-btn" title="Voice mode" aria-label="Voice mode"><svg class="i"><use href="#i-mic"/></svg></button>
+            <button class="send-btn hidden" id="send-btn" title="Send" aria-label="Send"><svg class="i"><use href="#i-up"/></svg></button>
+          </div>
+        </div>
+      </footer>
+    </div>
+    <aside id="agent-panel" class="hidden" aria-label="Agent profile"></aside>
+  </main>
+</div>
+
+<div id="command-palette" class="hidden" role="dialog" aria-modal="true" aria-labelledby="palette-title">
+  <div class="palette-panel">
+    <div class="palette-input"><svg class="i"><use href="#i-search"/></svg><input id="palette-search" placeholder="Search views, agents and commands" aria-label="Search" autocomplete="off"><button id="palette-close" class="kbd-btn" aria-label="Close">esc</button></div>
+    <span id="palette-title" class="sr-only">Search and commands</span>
+    <div id="palette-results" role="listbox" aria-label="Results"></div>
+    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span></div>
+  </div>
+</div>
+<div id="execution-inspector" class="hidden" role="dialog" aria-modal="true" aria-labelledby="inspector-title"><div class="inspector-panel"><div class="inspector-head"><h2 id="inspector-title">Details</h2><button id="inspector-close" class="icon-btn" aria-label="Close details"><svg class="i"><use href="#i-x"/></svg></button></div><div id="inspector-content"></div></div></div>
+
+<div id="modal-backdrop" class="hidden">
+  <div id="new-agent-modal" role="dialog" aria-modal="true" aria-labelledby="na-title">
+    <h2 id="na-title">New agent</h2>
+    <div class="na-row">
+      <span id="na-preview"></span>
+      <input id="na-name" type="text" placeholder="Name, e.g. QA Engineer" autocomplete="off">
+    </div>
+    <div class="na-swatches" id="na-swatches"></div>
+    <label class="field-label" for="na-prompt">Role</label>
+    <textarea id="na-prompt" rows="5" placeholder="What they own, how they work, what they're responsible for. Written to the agent as 'You are…'"></textarea>
+    <label class="field-label" for="na-cwd">Workspace folder</label>
+    <input id="na-cwd" type="text" placeholder="Optional, e.g. ~/Sites/myrepo" autocomplete="off" spellcheck="false">
+    <label class="field-label">Model</label>
+    <div class="na-model-row">
+      <select id="na-provider" title="Which model this agent thinks with"></select>
+      <input id="na-model" type="text" list="na-model-options" placeholder="model"
+             autocomplete="off" spellcheck="false">
+      <datalist id="na-model-options"></datalist>
+    </div>
+    <div class="na-hint" id="na-model-hint"></div>
+    <details id="na-policy" class="agent-policy hidden">
+      <summary>Limits and permissions</summary>
+      <div class="policy-limits"><label>Tool rounds<input id="na-rounds" type="number" min="1" max="200" value="40"></label><label>Total tool calls<input id="na-calls" type="number" min="1" max="800" value="160"></label></div>
+      <label>Allowed tools<input id="na-tools" type="text" placeholder="All tools (or comma-separated names)"></label>
+      <label>Allowed skills<input id="na-skills" type="text" placeholder="All skills (or comma-separated slugs)"></label>
+      <p>Blank uses all available capabilities. Enter “none” to disable. Skill contracts can narrow tool access further.</p>
+    </details>
+    <label class="na-check" id="na-imsg-row">
+      <input type="checkbox" id="na-imsg">
+      <span>Responds to your iMessages</span>
+    </label>
+    <div class="na-error" id="na-error"></div>
+    <div class="na-actions">
+      <button class="btn danger hidden" id="na-remove">Remove agent</button>
+      <span class="na-spacer"></span>
+      <button class="btn" id="na-cancel">Cancel</button>
+      <button class="btn primary" id="na-create">Create</button>
+    </div>
+  </div>
+</div>
+
+<div id="settings-backdrop" class="hidden">
+  <div id="settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
+    <div class="set-header">
+      <h2>Settings</h2>
+      <button class="icon-btn set-x" id="settings-close" title="Close" aria-label="Close settings"><svg class="i"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="set-tabs">
+      <button class="set-tab active" data-tab="llm">General</button>
+      <button class="set-tab" data-tab="browser">Websites</button>
+      <button class="set-tab" data-tab="channels">Channels</button>
+      <button class="set-tab" data-tab="github">Integrations</button>
+      <button class="set-tab" data-tab="jobs">Jobs<span id="jobs-badge" class="tab-badge hidden"></span></button>
+      <button class="set-tab" data-tab="memory">Knowledge</button>
+      <button class="set-tab" data-tab="improve">Improve<span id="improve-badge" class="tab-badge hidden"></span></button>
+      <button class="set-tab" data-tab="apple">Apple apps</button>
+    </div>
+
+    <div class="set-pane hidden" id="pane-browser">
+      <div class="set-hint top">Your agents can browse, search and work in websites you assign. Open their browser and sign in once; all agents share those sessions. Use chat to give an agent the website and task.</div>
+      <div id="browser-auth-requests" aria-live="polite"></div>
+      <div class="set-card">
+        <div class="set-row">
+          <label class="set-row-label" for="browser-enabled">Website access</label>
+          <label class="switch"><input type="checkbox" id="browser-enabled"><span></span></label>
+          <span class="set-status" id="browser-state" role="status">Checking…</span>
+        </div>
+        <div class="set-row-note">Turning this off closes the managed browser and stops browser tool access.</div>
+        <div class="set-row">
+          <label class="na-check"><input type="checkbox" id="browser-visible"><span>Show browser windows</span></label>
+        </div>
+        <div class="set-row-note">Changing visibility closes open tabs. Saved sign-ins remain in this workspace.</div>
+        <div class="set-row"><label class="set-row-label" for="browser-auth-channel">2FA delivery</label>
+          <select class="set-control" id="browser-auth-channel"><option value="auto">Connected messaging channel</option><option value="app">In this app only</option><option value="imessage">iMessage</option><option value="telegram">Telegram</option><option value="whatsapp">WhatsApp</option></select>
+        </div>
+        <div class="set-row-note">We nudge your configured private chat when a code is needed. Reply with the code to continue. Replies bypass agent chat and memory; your messaging app manages its own history.</div>
+      </div>
+      <div class="set-card">
+        <div class="set-row"><div class="set-row-label">Saved logins</div><span class="set-status" id="browser-vault-status">Checking secure storage…</span></div>
+        <div id="browser-credentials"></div>
+        <form id="browser-credential-form" autocomplete="off">
+          <input type="hidden" id="browser-credential-id">
+          <div class="set-row"><input class="set-control" id="browser-credential-url" type="url" required placeholder="https://accounts.example.com" aria-label="Login website address" autocomplete="off"><input class="set-control" id="browser-credential-label" maxlength="100" placeholder="Account label (optional)" aria-label="Account label"></div>
+          <div class="set-row"><input class="set-control" id="browser-credential-username" required maxlength="320" placeholder="Username or email" aria-label="Saved login username" autocomplete="off"><input class="set-control" id="browser-credential-password" type="password" required maxlength="4096" placeholder="Password" aria-label="Saved login password" autocomplete="new-password"></div>
+          <div class="set-row"><button class="btn primary" id="browser-credential-save" type="submit">Save login securely</button><button class="btn hidden" id="browser-credential-cancel" type="button">Cancel update</button></div>
+        </form>
+        <div class="set-row-note">Saved in your operating system's credential vault for this exact HTTPS address. Agents use the login without receiving its password. 2FA codes are used once and never saved in the vault.</div>
+      </div>
+      <div class="set-card">
+        <form id="browser-open-form" class="set-row">
+          <input id="browser-url" class="set-control" type="text" placeholder="Website URL (optional)" aria-label="Website URL" autocomplete="off" spellcheck="false">
+          <button class="btn primary" id="browser-open" type="submit">Open browser / sign in</button>
+        </form>
+        <div class="set-row-note">This browser has its own profile. Sign in here for sites that need an account; your personal browser's logins stay separate.</div>
+        <div id="browser-feedback" class="set-status" role="status" aria-live="polite"></div>
+      </div>
+      <div class="set-row"><div class="set-row-label">Live browser tabs</div><button class="btn" id="browser-refresh">Refresh</button></div>
+      <div id="browser-sessions" class="mem-list"></div>
+      <div class="set-row"><div class="set-row-label">Agent access</div></div>
+      <div id="browser-agents" class="set-hint"></div>
+      <div class="set-hint">Browser actions appear in the agent's chat and on Home. Passwords and 2FA responses go directly to protected login fields. You handle passkeys, CAPTCHAs, password changes and payment fields in the browser.</div>
+    </div>
+
+    <div class="set-pane hidden" id="pane-apple">
+      <div class="set-hint top">Your own Mac apps, one switch each. Agents read widely and write narrowly: they can add a note, an event or a reminder, and draft mail — never send it. Messages is read-only; texting still goes through the iMessage channel.</div>
+      <div class="set-card" id="apple-list"></div>
+      <div class="set-hint" id="apple-note"></div>
+    </div>
+
+    <div class="set-pane hidden" id="pane-improve">
+      <div class="set-hint top">Mission Control can change its own code. Every change is written and tested on its own branch, never in the running code. These switches decide what lands on its own and what waits for you.</div>
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-row-label">Let agents propose changes</div>
+          <div class="set-row-note">An agent that hits a real limitation in the app can put a tested branch in front of you. Agents' proposals always wait for your approval.</div>
+          <label class="switch"><input type="checkbox" class="improve-switch" data-key="enabled" id="improve-enabled"><span></span></label>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Find and fix its own problems</div>
+          <div class="set-row-note">Watches the team's turns for problems that are the app's fault, like replies cut off at the output limit or turns that crash the same way, and has Claude Code write a fix with a test.</div>
+          <label class="switch"><input type="checkbox" class="improve-switch" data-key="autofix"><span></span></label>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Land fixes that pass the tests</div>
+          <div class="set-row-note">Merges its own green fixes and restarts once no agent is mid-turn. If the app does not come back, the previous code is put back automatically.</div>
+          <label class="switch"><input type="checkbox" class="improve-switch" data-key="auto_apply"><span></span></label>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Push landed changes to GitHub</div>
+          <div class="set-row-note">Pushes once the app is back up on the change. Never forced: if GitHub has commits this Mac lacks, the push is left to you.</div>
+          <label class="switch"><input type="checkbox" class="improve-switch" data-key="push"><span></span></label>
+        </div>
+      </div>
+      <div id="improve-blocked" class="set-hint warn hidden"></div>
+      <div class="set-footer"><span class="set-status" id="improve-last"></span><button class="btn" id="improve-check">Check now</button></div>
+      <div id="improve-issues" class="mem-list"></div>
+      <div class="set-hint" id="improve-protected"></div>
+      <div id="improve-list" class="mem-list"></div>
+    </div>
+
+    <div class="set-pane hidden" id="pane-memory">
+      <div class="set-hint top">What the team believes, in one place. Fix a wrong memory, delete a stale one, rewrite a skill; agents see the change on their next turn.</div>
+      <div class="set-row">
+        <input id="mem-q" class="set-control wide" type="text" placeholder="search team memory" autocomplete="off" spellcheck="false">
+      </div>
+      <div id="mem-list" class="mem-list"></div>
+      <div class="set-row" style="margin-top:18px"><div class="set-row-label">Skills</div><div class="set-hint" style="margin:0">Procedures the team saved for itself. Click one to edit.</div></div>
+      <label class="na-check" id="autolearn-row">
+        <input type="checkbox" id="autolearn">
+        <span>Learn skills automatically after long pieces of work</span>
+      </label>
+      <div id="skill-list" class="mem-list"></div>
+      <div class="set-row" style="margin-top:18px"><div class="set-row-label">Web playbooks</div><div class="set-hint" style="margin:0">Site-by-site steps the browser learned.</div></div>
+      <div id="pb-list" class="mem-list"></div>
+    </div>
+
+    <div class="set-pane" id="pane-llm">
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-row-label">Your name</div>
+          <input id="owner-name" class="set-control" type="text" maxlength="40" autocomplete="off" placeholder="You">
+          <button class="btn primary" id="owner-save">Save</button>
+          <span class="set-status" id="owner-status"></span>
+        </div>
+      </div>
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-row-label">Provider</div>
+          <select id="llm-provider" class="set-control"></select>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Model</div>
+          <input id="llm-model" class="set-control" type="text" list="llm-model-options"
+                 placeholder="type or pick a model" autocomplete="off" spellcheck="false">
+          <datalist id="llm-model-options"></datalist>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Effort</div>
+          <select id="llm-effort" class="set-control">
+            <option value="none">none, no thinking (fastest)</option>
+            <option value="low">low (fast)</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="max">max (slowest)</option>
+          </select>
+        </div>
+        <div class="set-row" id="llm-baseurl-row">
+          <div class="set-row-label">Base URL</div>
+          <input id="llm-baseurl" class="set-control" type="text"
+                 placeholder="https://host/v1" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="set-row" id="llm-key-row">
+          <div class="set-row-label">API key</div>
+          <input id="llm-key" class="set-control" type="password" placeholder="paste key" autocomplete="off">
+        </div>
+      </div>
+      <div class="set-hint" id="llm-hint">Local providers run on your machine with no key. Keys are stored in your local .env, never synced.</div>
+      <div class="set-row stack">
+        <div class="set-row-label">Fallbacks</div>
+        <textarea id="llm-fallbacks" class="set-control wide" rows="2" spellcheck="false"
+          placeholder="tried in order while the main model is down, one per line: provider model&#10;deepseek deepseek-v4-pro"></textarea>
+      </div>
+      <div class="set-footer">
+        <span class="set-status" id="llm-status"></span>
+        <button class="btn ghost" id="llm-test">Test</button>
+        <button class="btn primary" id="llm-save">Save</button>
+      </div>
+
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-row-label">Usage, last 7 days</div>
+          <button class="btn ghost" id="usage-refresh">Refresh</button>
+        </div>
+        <div id="usage-table" class="set-hint" style="margin:4px 0 10px"></div>
+        <div class="set-row">
+          <div class="set-row-label">Daily budget</div>
+          <input id="budget-tokens" class="set-control" type="number" min="0" step="10000" placeholder="0 = no limit">
+          <button class="btn primary" id="budget-save">Save</button>
+        </div>
+        <div class="set-hint" id="budget-status" style="margin:0 0 4px"></div>
+      </div>
+
+      <div class="set-card" id="voice-card">
+        <div class="set-row">
+          <div class="set-row-label">Team voice</div>
+          <select id="voice-id" class="set-control"></select>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Speed</div>
+          <select id="voice-speed" class="set-control">
+            <option value="0.85">Unhurried, 0.85×</option>
+            <option value="0.95">Natural, 0.95×</option>
+            <option value="1">Normal, 1×</option>
+            <option value="1.1">Brisk, 1.1×</option>
+          </select>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Listening</div>
+          <div class="set-hint" id="voice-stt" style="margin:0"></div>
+        </div>
+        <div class="set-hint">One voice everywhere: voice mode here, spoken replies on the phone, voice notes on iMessage and Telegram. Licensed studio voices through your model provider's key.</div>
+        <div class="set-footer">
+          <span class="set-status" id="voice-status-set"></span>
+          <button class="btn ghost" id="voice-preview">Preview</button>
+          <button class="btn primary" id="voice-save">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="set-pane hidden" id="pane-channels">
+      <div class="set-hint top">Message your team from your phone. Each channel routes to the agent you choose, and that agent's replies mirror back.</div>
+      <div id="channel-cards"></div>
+      <div class="set-hint" id="channels-public-url"></div>
+      <div class="set-card" id="devices-card">
+        <div class="set-row">
+          <div class="set-row-label">Phones</div>
+          <div class="set-hint" id="devices-list" style="margin:0;flex:1"></div>
+          <button class="btn ghost" id="push-test">Send test push</button>
+        </div>
+        <div class="set-hint">The Mission Control app on a phone registers itself when it connects. When you are away from every app window, an agent's reply buzzes the phone directly; no account, no cloud in between.</div>
+        <div class="set-status" id="push-status"></div>
+      </div>
+    </div>
+
+    <div class="set-pane hidden" id="pane-jobs">
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-row-label">Heartbeat</div>
+          <div class="set-row-note">A proactive pulse: the agent reviews your checklist and only speaks up when something needs attention.</div>
+          <label class="switch"><input type="checkbox" id="hb-enabled"><span></span></label>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Agent</div>
+          <select id="hb-agent" class="set-control"></select>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Every (minutes)</div>
+          <input id="hb-minutes" class="set-control" type="number" min="5" max="1440">
+        </div>
+        <div class="set-row stack">
+          <div class="set-row-label">Checklist</div>
+          <textarea id="hb-checklist" class="set-control wide" rows="6" spellcheck="false"></textarea>
+        </div>
+        <div class="set-footer">
+          <span class="set-status" id="hb-status"></span>
+          <button class="btn primary" id="hb-save">Save</button>
+        </div>
+      </div>
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-row-label">Daily brief</div>
+          <div class="set-row-note">A proactive morning digest: overnight GitHub activity, messages, job outcomes, and anything waiting on you, sent to your chat and phone.</div>
+          <label class="switch"><input type="checkbox" id="brief-enabled"><span></span></label>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Agent</div>
+          <select id="brief-agent" class="set-control"></select>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">At (HH:MM)</div>
+          <input id="brief-at" class="set-control" type="text" placeholder="08:00" spellcheck="false">
+        </div>
+        <div class="set-footer">
+          <span class="set-status" id="brief-status"></span>
+          <button class="btn primary" id="brief-save">Save</button>
+        </div>
+      </div>
+      <div class="set-hint top">Agents can schedule recurring or one-off work, but nothing runs until you approve it here.</div>
+      <div id="job-cards"></div>
+    </div>
+
+    <div class="set-pane hidden" id="pane-github">
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-row-label">Watch GitHub repositories</div>
+          <label class="switch"><input type="checkbox" id="gh-enabled"><span></span></label>
+        </div>
+        <div class="set-row stack">
+          <div class="set-row-label">Repos</div>
+          <input id="gh-repos" class="set-control wide" type="text"
+                 placeholder="owner/repo, owner/other" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">CI failures go to</div>
+          <select id="gh-route-ci" class="set-control"></select>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">PRs and issues go to</div>
+          <select id="gh-route-code" class="set-control"></select>
+        </div>
+      </div>
+      <div class="set-hint">Needs the gh CLI signed in and cloudflared installed. Webhooks are created and kept updated automatically.</div>
+      <div class="set-footer">
+        <span class="set-status" id="gh-status"></span>
+        <button class="btn primary" id="gh-save">Save</button>
+      </div>
+
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-row-label">Webhooks</div>
+          <div class="set-row-note">Let any service reach your team: each route gets a URL that wakes an agent with the payload, or just drops it in the chat at zero model cost.</div>
+        </div>
+        <div id="hook-list" class="set-hint" style="margin:4px 0 8px; user-select:text"></div>
+        <div class="set-row">
+          <input id="hook-name" class="set-control" type="text" placeholder="route name" spellcheck="false" style="flex:1">
+          <select id="hook-agent" class="set-control" style="flex:1"></select>
+          <select id="hook-mode" class="set-control" style="flex:0 0 110px">
+            <option value="wake">wake agent</option>
+            <option value="notify">notify only</option>
+          </select>
+          <button class="btn primary" id="hook-add">Add</button>
+        </div>
+        <div class="set-status" id="hook-status"></div>
+      </div>
+
+      <div class="set-card" id="wa-card">
+        <div class="set-row">
+          <div class="set-row-label">WhatsApp</div>
+          <div class="set-row-note">Your own account, linked to this Mac the way WhatsApp Web is. Agents can read what arrives and the files people send you; nothing can send, reply or mark a chat read.</div>
+          <label class="switch"><input type="checkbox" id="wa-enabled"><span></span></label>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label"><span class="ch-dot" id="wa-dot"></span> <span id="wa-state">Off</span></div>
+          <div class="set-row-note" id="wa-detail"></div>
+          <button class="btn" id="wa-link">Link</button>
+          <button class="btn ghost danger hidden" id="wa-unlink">Unlink</button>
+        </div>
+        <div class="set-row stack hidden" id="wa-pair">
+          <div class="wa-pair">
+            <div class="wa-qr" id="wa-qr"></div>
+            <div class="wa-pair-help">
+              <div>On your phone, open WhatsApp &rsaquo; Settings &rsaquo; Linked devices &rsaquo; Link a device, and scan this code.</div>
+              <div class="set-hint">On the phone itself? Link with a code instead: enter your number with its country code, then on the phone choose &ldquo;Link with phone number instead&rdquo;.</div>
+              <div class="wa-code-row">
+                <input id="wa-phone" class="set-control" type="tel" placeholder="960 7xx xxxx" autocomplete="off">
+                <button class="btn" id="wa-code-btn">Get code</button>
+              </div>
+              <div class="wa-code" id="wa-code"></div>
+            </div>
+          </div>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Group chats</div>
+          <div class="set-row-note">Off: only direct chats are recorded, plus the groups you name below.</div>
+          <label class="switch"><input type="checkbox" id="wa-groups"><span></span></label>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Include groups</div>
+          <input id="wa-include" class="set-control" type="text" placeholder="Group names, comma-separated" spellcheck="false">
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Never record</div>
+          <input id="wa-ignore" class="set-control" type="text" placeholder="Chat names or phone numbers" spellcheck="false">
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Agents who can read</div>
+          <input id="wa-agents" class="set-control" type="text" placeholder="All agents" spellcheck="false"
+                 title="Agent ids, comma-separated. Blank for every agent.">
+        </div>
+        <div class="set-hint" id="wa-counts"></div>
+        <div class="set-footer">
+          <span class="set-status" id="wa-status"></span>
+          <button class="btn primary" id="wa-save">Save</button>
+        </div>
+      </div>
+
+      <div class="set-card" id="mcp-card">
+        <div class="set-row">
+          <div class="set-row-label">MCP servers</div>
+          <div class="set-row-note">Give your agents tools from other apps. They reach them through the mcp tool; a call the server marks destructive waits in your Inbox until you approve it.</div>
+        </div>
+        <div id="mcp-list"></div>
+        <div class="set-row stack">
+          <div class="set-row-label">Add servers</div>
+          <textarea id="mcp-json" class="set-control wide mcp-json" rows="5" spellcheck="false" autocomplete="off"
+                    placeholder='Paste an "mcpServers" JSON block, from the other app's settings'></textarea>
+        </div>
+        <div class="set-footer">
+          <span class="set-status" id="mcp-status"></span>
+          <button class="btn primary" id="mcp-import">Add</button>
+        </div>
+      </div>
+
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-row-label">Import</div>
+          <div class="set-row-note">Pull skills or starter agents from a git repository. Only import sources you trust: skills are instructions your agents will follow.</div>
+        </div>
+        <div class="set-row">
+          <input id="import-url" class="set-control" type="text" placeholder="https://github.com/user/repo" spellcheck="false" style="flex:1">
+          <select id="import-kind" class="set-control" style="flex:0 0 110px">
+            <option value="skills">skills</option>
+            <option value="agents">agents</option>
+          </select>
+          <button class="btn primary" id="import-run">Import</button>
+        </div>
+        <div class="set-status" id="import-status"></div>
+      </div>
+
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-row-label">Add a machine</div>
+          <div class="set-row-note">Run Mission Control on several machines as one team: shared memory, skills and playbooks, and agents that message each other across machines. One paste connects them.</div>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Tailscale</div>
+          <div class="set-hint" id="ts-status" style="margin:0;flex:1">checking…</div>
+          <button class="btn ghost" id="ts-setup">Set up</button>
+        </div>
+        <div id="ts-note" class="set-hint" style="margin:2px 0 8px"></div>
+        <div class="set-row stack">
+          <div class="set-row-label">On this machine, make a code the other one pastes</div>
+          <button class="btn ghost" id="join-create" style="align-self:flex-start">Create join code</button>
+          <textarea id="join-code-out" class="set-control wide hidden" rows="2" readonly spellcheck="false"></textarea>
+        </div>
+        <div class="set-row stack">
+          <div class="set-row-label">Or paste a code from another machine to join it</div>
+          <textarea id="join-code-in" class="set-control wide" rows="2" spellcheck="false" placeholder="paste the other machine's join code"></textarea>
+          <div style="display:flex;gap:10px;align-items:center">
+            <button class="btn primary" id="join-go">Join fleet</button>
+            <span class="set-status" id="join-status"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-row-label">Fleet, manual</div>
+          <div class="set-row-note">Set names, key and machine addresses by hand. The pairing card above does this for you.</div>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">This machine's name</div>
+          <input id="fleet-node" class="set-control" type="text" placeholder="studio" spellcheck="false">
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Fleet key</div>
+          <input id="fleet-key" class="set-control" type="password" placeholder="same key on every machine" autocomplete="off">
+        </div>
+        <div class="set-row stack">
+          <div class="set-row-label">Machines</div>
+          <textarea id="fleet-peers" class="set-control wide" rows="3" spellcheck="false"
+            placeholder="one per line: name http://host:8902&#10;laptop http://192.168.1.20:8902"></textarea>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">This machine's address</div>
+          <button class="btn ghost" id="fleet-detect">Detect</button>
+        </div>
+        <div id="fleet-addresses" class="set-hint" style="margin:0 0 6px; user-select: text;"></div>
+        <div id="fleet-status" class="set-hint" style="margin:8px 0 4px"></div>
+      </div>
+      <div class="set-hint">Every machine needs the same fleet key and each other's address. Knowledge syncs every minute; restart the app after first enabling. No static IP? Install Tailscale and use Detect to get a stable address that works from anywhere.</div>
+      <div class="set-footer">
+        <span class="set-status" id="fleet-save-status"></span>
+        <button class="btn primary" id="fleet-save">Save</button>
+      </div>
+
+      <div class="set-card hidden" id="cloud-card">
+        <div class="set-row">
+          <div class="set-row-label">Cloud account</div>
+          <div class="set-row-note">A Mission Control Cloud account powers the metered model plan and push notifications to your phone.</div>
+        </div>
+        <div id="cloud-connected" class="hidden">
+          <div class="set-row">
+            <div class="set-row-label">Signed in</div>
+            <div class="set-row-note" id="cloud-info"></div>
+            <button class="btn ghost" id="cloud-disconnect">Sign out</button>
+          </div>
+        </div>
+        <div id="cloud-form">
+          <div class="set-row">
+            <div class="set-row-label">Cloud URL</div>
+            <input id="cloud-url" class="set-control" type="text" placeholder="https://cloud.example.com" spellcheck="false">
+          </div>
+          <div class="set-row">
+            <div class="set-row-label">Email</div>
+            <input id="cloud-email" class="set-control" type="email" autocomplete="off">
+          </div>
+          <div class="set-row">
+            <div class="set-row-label">Password</div>
+            <input id="cloud-pass" class="set-control" type="password" autocomplete="off">
+          </div>
+          <div class="set-footer">
+            <span class="set-status" id="cloud-status"></span>
+            <button class="btn primary" id="cloud-connect">Sign in</button>
+          </div>
+        </div>
+      </div>
+      <div class="set-hint hidden" id="cloud-hint">After signing in, pick the Mission Control Cloud provider in the Model tab with base URL <code>&lt;cloud&gt;/api/llm</code>; your usage and plan live in the cloud account.</div>
+
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-row-label">Mobile access</div>
+          <div class="set-row-note">Let the Mission Control mobile app connect from your phone. Turn on, restart, and use your Tailscale or LAN address with the token below.</div>
+          <label class="switch"><input type="checkbox" id="remote-expose"><span></span></label>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Access token</div>
+          <input id="remote-token" class="set-control" type="text" readonly style="user-select:text; font-family: ui-monospace, monospace; font-size: 11px;">
+          <button class="btn ghost" id="remote-regen">New</button>
+        </div>
+        <div class="set-status" id="remote-status"></div>
+      </div>
+      <div class="set-hint">Local connections never need the token; anything remote does. Keep remote access on a private network like Tailscale.</div>
+
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-row-label">Ports</div>
+          <div class="set-row-note">Where Mission Control listens on this machine. Restart to apply.</div>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">App</div>
+          <input id="port-app" class="set-control" type="number" min="1024" max="65535" spellcheck="false">
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Webhook listener</div>
+          <input id="port-public" class="set-control" type="number" min="1024" max="65535" spellcheck="false">
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Fleet</div>
+          <input id="port-fleet" class="set-control" type="number" min="1024" max="65535" spellcheck="false">
+        </div>
+      </div>
+      <div class="set-hint">Running the server under launchd or your own supervisor? Update its command to match the app port.</div>
+      <div class="set-footer">
+        <span class="set-status" id="ports-status"></span>
+        <button class="btn primary" id="ports-save">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<div id="welcome-backdrop" class="hidden">
+  <div id="welcome-modal" role="dialog" aria-modal="true" aria-labelledby="wel-title">
+    <div class="wel-mark" aria-hidden="true"><span class="brand-mark big"><i></i><i></i><i></i></span></div>
+    <h2 id="wel-title">Plug in a model</h2>
+    <p class="wel-sub">Your team is here. It only needs something to think with.</p>
+    <input id="wel-name" class="set-control wide" type="text" placeholder="Your name" autocomplete="off" maxlength="40" style="margin-bottom:10px">
+    <div class="wel-divider"><span>and a model</span></div>
+    <div id="wel-local" class="wel-option hidden">
+      <div class="wel-opt-head"><span class="wel-dot"></span><strong>Local model found</strong><span class="wel-badge" id="wel-local-kind">Ollama</span></div>
+      <div class="wel-opt-body"><span id="wel-local-model"></span> is running on this machine. Private, free, no key.</div>
+      <button class="btn primary wide" id="wel-use-local">Use it</button>
+    </div>
+    <div class="wel-divider hidden" id="wel-or"><span>or use an API key</span></div>
+    <div class="wel-cloud">
+      <input type="hidden" id="wel-provider">
+      <div class="wel-providers" id="wel-providers"></div>
+      <input id="wel-key" class="set-control wide" type="password" placeholder="API key" autocomplete="off">
+      <div class="wel-keyhint" id="wel-keyhint"></div>
+      <input id="wel-model" class="set-control wide" type="text" list="wel-model-options"
+             placeholder="model" autocomplete="off" spellcheck="false">
+      <datalist id="wel-model-options"></datalist>
+      <input id="wel-base" class="set-control wide hidden" type="url" placeholder="https://host/v1" spellcheck="false">
+      <button class="btn primary wide" id="wel-connect">Connect</button>
+    </div>
+    <div class="set-status center" id="wel-status"></div>
+    <button class="wel-skip" id="wel-skip">Skip for now</button>
+  </div>
+</div>
+
+
+<div id="browser-auth-alert" class="hidden" role="status"><span id="browser-auth-alert-text"></span><button class="btn primary" id="browser-auth-review">Review sign-in</button></div>
+<script src="/static/app.js"></script>
+<script src="/static/browser.js"></script>
+<script src="/static/deck.js"></script>
+<script src="/static/native.js"></script>
+</body>
+</html>

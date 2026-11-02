@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+from pathlib import Path
+USAGE = """envoyer: thin CLI over the Envoyer API for Mission Control's deploys.
+
+Commands:
+  envoyer projects                      list projects (id, name, repo, branch)
+  envoyer deployments <project_id>      recent deployments (id, status, commit)
+  envoyer deploy <project_id> [--branch B | --tag T]   trigger a deployment
+  envoyer status <project_id> [dep_id]  status of a deployment (latest if id omitted)
+  envoyer watch <project_id> [dep_id]   poll until the deployment finishes/fails
+
+Reads ENVOYER_API_KEY from the project .env. Deploy is the only write action.
+"""
+import json, os, sys, time, urllib.request, urllib.error
+
+BASE = "https://envoyer.io/api"
+
+
+def key():
+    for env_path in (str(Path(__file__).resolve().parent.parent / ".env"),):
+        try:
+            lines = open(os.path.expanduser(env_path))
+        except FileNotFoundError:
+            continue
+        for line in lines:
+            if line.startswith("ENVOYER_API_KEY="):
+                return line.split("=", 1)[1].strip()
+    sys.exit("ENVOYER_API_KEY not found in project .env")
+
+
+def call(method, path, body=None):
+    req = urllib.request.Request(
+        BASE + path, method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Authorization": f"Bearer {key()}", "Accept": "application/json",
+                 "Content-Type": "application/json",
+                 "User-Agent": "curl/8.4.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            raw = r.read().decode()
+            return json.loads(raw) if raw.strip() else {}
+    except urllib.error.HTTPError as e:
+        sys.exit(f"Envoyer API {e.code}: {e.read().decode()[:200]}")
+
+
+def unwrap(d, plural):
+    return d.get(plural, d) if isinstance(d, dict) else d
+
+
+def cmd_projects(a):
+    for p in unwrap(call("GET", "/projects"), "projects") or []:
+        print(f"{p.get('id')} | {p.get('name')} | {p.get('repository')} | {p.get('branch')}")
+
+
+def cmd_deployments(a):
+    pid = a[0]
+    for x in (unwrap(call("GET", f"/projects/{pid}/deployments"), "deployments") or [])[:8]:
+        print(f"{x.get('id')} | {x.get('status')} | {(x.get('commit_message') or '')[:50]}")
+
+
+def _parse_flags(a):
+    body = None
+    if "--branch" in a:
+        body = {"from": "branch", "branch": a[a.index("--branch") + 1]}
+    elif "--tag" in a:
+        body = {"from": "tag", "tag": a[a.index("--tag") + 1]}
+    return body
+
+
+def cmd_deploy(a):
+    pid = a[0]
+    body = _parse_flags(a)
+    res = call("POST", f"/projects/{pid}/deployments", body)
+    dep = unwrap(res, "deployment")
+    did = dep.get("id") if isinstance(dep, dict) else None
+    print(f"triggered deployment {did or '(id pending)'} for project {pid}"
+          f"{' from ' + json.dumps(body) if body else ' (default branch)'}")
+
+
+def _latest_dep(pid):
+    deps = unwrap(call("GET", f"/projects/{pid}/deployments"), "deployments") or []
+    return deps[0] if deps else None
+
+
+def cmd_status(a):
+    pid = a[0]
+    if len(a) > 1 and a[1].isdigit():
+        deps = unwrap(call("GET", f"/projects/{pid}/deployments"), "deployments") or []
+        dep = next((d for d in deps if str(d.get("id")) == a[1]), None)
+    else:
+        dep = _latest_dep(pid)
+    if not dep:
+        sys.exit("no deployment found")
+    print(f"deployment {dep.get('id')}: {dep.get('status')} - {(dep.get('commit_message') or '')[:60]}")
+
+
+def cmd_watch(a):
+    pid = a[0]
+    target = a[1] if len(a) > 1 and a[1].isdigit() else None
+    last = "unknown"
+    for _ in range(28):  # ~2 min, kept under the 180s terminal timeout
+        deps = unwrap(call("GET", f"/projects/{pid}/deployments"), "deployments") or []
+        dep = next((d for d in deps if str(d.get("id")) == target), None) if target else (deps[0] if deps else None)
+        if not dep:
+            sys.exit("no deployment found")
+        last = dep.get("status")
+        if last in ("finished", "failed", "cancelled"):
+            print(f"deployment {dep.get('id')}: {last}")
+            sys.exit(0 if last == "finished" else 1)
+        time.sleep(4)
+    print(f"deployment {target or '(latest)'}: still {last} after ~2min (not done). "
+          "For a long deploy, use the watch tool instead of blocking here.")
+    sys.exit(2)
+
+
+CMDS = {"projects": cmd_projects, "deployments": cmd_deployments,
+        "deploy": cmd_deploy, "status": cmd_status, "watch": cmd_watch}
+
+
+def normalize(argv):
+    """Accept the positional form (`status 12345 67890`) AND the REST-path
+    form (`projects/12345/deployments/67890/status`, `.../deploys/<id>`,
+    `.../watch`, `.../deploy`), so a caller who reaches for path syntax still
+    works instead of hitting a usage error."""
+    if len(argv) >= 2 and argv[1] not in CMDS and argv[1].startswith("projects/"):
+        segs = [s for s in argv[1].split("/") if s]
+        pid = segs[1] if len(segs) > 1 else ""
+        ident = next((s for s in segs[2:] if s.isdigit()), "")
+        verb = next((s for s in segs[2:]
+                     if s in ("deploy", "deployments", "deploys", "status", "watch")), "")
+        flags = []
+        for f in ("--branch", "--tag"):
+            if f in argv:
+                flags = [f, argv[argv.index(f) + 1]]
+                break
+        if verb == "watch":
+            return [argv[0], "watch", pid] + ([ident] if ident else [])
+        if verb == "deploy":
+            return [argv[0], "deploy", pid] + flags
+        if verb in ("deployments", "deploys") and not ident:
+            return [argv[0], "deployments", pid]
+        return [argv[0], "status", pid] + ([ident] if ident else [])
+    return argv
+
+
+argv = normalize(sys.argv)
+if len(argv) < 2 or argv[1] not in CMDS:
+    sys.exit("envoyer: unknown command %r\n\n%s" % (argv[1:2], USAGE))
+CMDS[argv[1]](argv[2:])

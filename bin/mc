@@ -1,0 +1,378 @@
+#!/usr/bin/env python3
+"""mc: talk to Mission Control from the terminal.
+
+  mc                       chat with the lead agent; replies stream in as they are written
+  mc -a webdev             chat with another agent
+  mc "deploy acmeshop"     one message, print the reply, exit
+  echo "..." | mc          same, reading the message from stdin
+
+Inside the chat:
+  @webdev text             send one message to another agent
+  /agent webdev            switch to another agent for the rest of the session
+  /model, /effort, /status, /stop ...   the server's slash commands (/help lists them)
+  /quit                    leave (Ctrl-D does too)
+
+The server address comes from MC_URL (default http://127.0.0.1:8899) and, for
+remote access, MC_TOKEN. Set in the environment or in ~/.config/mc/env.
+"""
+import argparse
+import asyncio
+import json
+import os
+import signal
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+try:
+    import websockets
+except ImportError:                       # use the project's own interpreter
+    venv = ROOT / "venv" / "bin" / "python"
+    if venv.exists() and Path(sys.executable).resolve() != venv.resolve():
+        os.execv(str(venv), [str(venv), __file__, *sys.argv[1:]])
+    sys.exit("mc needs the 'websockets' package: pip install websockets")
+
+
+# ── config ──────────────────────────────────────────────────────────────
+
+def _env_file() -> dict:
+    path = Path.home() / ".config" / "mc" / "env"
+    out = {}
+    if path.exists():
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                out[k.strip()] = v.strip().strip('"').strip("'")
+    return out
+
+
+_FILE = _env_file()
+URL = (os.environ.get("MC_URL") or _FILE.get("MC_URL") or "http://127.0.0.1:8899").rstrip("/")
+TOKEN = os.environ.get("MC_TOKEN") or _FILE.get("MC_TOKEN") or ""
+
+TTY = sys.stdout.isatty()
+_COLOR = TTY and os.environ.get("NO_COLOR") is None
+
+
+def c(code: str, text: str) -> str:
+    return f"\033[{code}m{text}\033[0m" if _COLOR else text
+
+
+DIM, BOLD, CYAN, GREEN, YELLOW, RED, MAGENTA = "2", "1", "36", "32", "33", "31", "35"
+
+
+# ── http ────────────────────────────────────────────────────────────────
+
+def api(method: str, path: str, body: dict | None = None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(URL + path, data=data, method=method,
+                                 headers={"Content-Type": "application/json",
+                                          **({"Authorization": f"Bearer {TOKEN}"} if TOKEN else {})})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        try:
+            detail = json.load(e).get("error") or json.load(e).get("detail")
+        except Exception:
+            detail = e.reason
+        raise SystemExit(c(RED, f"server said {e.code}: {detail}"))
+    except urllib.error.URLError as e:
+        raise SystemExit(c(RED, f"Mission Control is not reachable at {URL} ({e.reason}). "
+                              "Is it running? Set MC_URL if it lives elsewhere."))
+
+
+def ws_url() -> str:
+    base = URL.replace("https://", "wss://", 1).replace("http://", "ws://", 1) + "/ws"
+    return base + (f"?token={urllib.parse.quote(TOKEN)}" if TOKEN else "")
+
+
+# ── rendering ───────────────────────────────────────────────────────────
+
+class View:
+    """Prints the conversation. Streamed text goes out as it arrives; the
+    posted message that follows is printed only if it says something the
+    stream did not."""
+
+    def __init__(self, agents: dict):
+        self.agents = agents
+        self.streamed = ""
+        self.thinking = False      # dim reasoning is on screen, answer not yet begun
+        self.mid_line = False
+        self.prompt = ""
+
+    def name(self, aid: str) -> str:
+        return self.agents.get(aid, {}).get("name") or aid
+
+    def clear_line(self):
+        if self.mid_line:
+            sys.stdout.write("\n")
+            self.mid_line = False
+
+    def interrupt(self):
+        """Make room for a line printed while the user is at the prompt."""
+        if self.prompt and TTY:
+            sys.stdout.write("\r\033[K")
+
+    def restore(self):
+        if self.prompt and TTY:
+            sys.stdout.write(self.prompt)
+            sys.stdout.flush()
+
+    def thought(self, aid: str, text: str):
+        """The model's reasoning as it goes, dimmed; the answer replaces it."""
+        if self.streamed:
+            return
+        if not self.thinking:
+            self.interrupt()
+            sys.stdout.write(c(DIM, f"{self.name(aid)} is thinking: "))
+            self.thinking = True
+        self.mid_line = True
+        sys.stdout.write(c(DIM, text.replace("\n", " ")))
+        sys.stdout.flush()
+
+    def delta(self, aid: str, text: str):
+        if not self.streamed:
+            if self.thinking:
+                sys.stdout.write("\n")
+                self.thinking = False
+            else:
+                self.interrupt()
+            sys.stdout.write(c(BOLD, f"{self.name(aid)}: "))
+        self.streamed += text
+        self.mid_line = True
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+    def reset(self):
+        if self.streamed or self.thinking:
+            sys.stdout.write(c(DIM, "  (starting over)\n"))
+            self.streamed, self.thinking, self.mid_line = "", False, False
+
+    def message(self, m: dict, me: str):
+        text = (m.get("text") or "").strip()
+        kind = m.get("kind")
+        sender = m.get("sender")
+        if sender == "user":
+            return
+        if kind == "tool":
+            self.thinking = False
+            self.clear_line()
+            self.interrupt()
+            tool = (m.get("meta") or {}).get("tool") or "tool"
+            line = text.splitlines()[0][:160] if text else ""
+            print(c(DIM, f"  ⚙ {tool}: {line}"))
+            self.restore()
+            return
+        if kind == "a2a":
+            self.clear_line()
+            self.interrupt()
+            to = (m.get("meta") or {}).get("to") or "?"
+            print(c(DIM, f"  → {sender} to {to}: {text[:200]}"))
+            self.restore()
+            return
+        if self.streamed and text and text in self.streamed:
+            return                      # already on screen, word for word
+        self.clear_line()
+        self.interrupt()
+        who = "control" if sender == "control" else self.name(sender)
+        colour = MAGENTA if sender in ("control", "budget") else BOLD
+        print(f"{c(colour, who + ':')} {text}")
+        for att in (m.get("meta") or {}).get("attachments") or []:
+            print(c(DIM, f"  [file] {att.get('name') or att.get('url') or att}"))
+        self.restore()
+
+    def end_turn(self):
+        self.clear_line()
+        self.streamed, self.thinking = "", False
+
+
+# ── the session ─────────────────────────────────────────────────────────
+
+class Session:
+    def __init__(self, agent: str, view: View):
+        self.agent = agent
+        self.view = view
+        self.turn_done = asyncio.Event()
+        self.turn_done.set()
+        self.waiting_on: str | None = None
+
+    @property
+    def thread(self):
+        return f"dm:{self.agent}"
+
+    def handle(self, ev: dict):
+        kind = ev.get("type")
+        if kind == "stream":
+            if ev.get("thread") != self.thread:
+                return
+            if ev.get("reset"):
+                self.view.reset()
+                return
+            if TTY and ev.get("thinking"):
+                self.view.thought(ev["agent"], ev["thinking"])
+            if TTY and ev.get("text"):
+                self.view.delta(ev["agent"], ev["text"])
+        elif kind == "message":
+            m = ev.get("msg") or {}
+            mine = m.get("thread") == self.thread or (
+                m.get("kind") == "a2a" and self.agent in (m.get("sender"), (m.get("meta") or {}).get("to")))
+            if mine:
+                self.view.message(m, self.agent)
+        elif kind == "typing":
+            if ev.get("thread") == self.thread and ev.get("agent") == self.agent and not ev.get("on"):
+                self.view.end_turn()
+                self.turn_done.set()
+
+    async def send(self, text: str, to: str | None = None) -> dict:
+        thread = f"dm:{to}" if to else self.thread
+        res = await asyncio.to_thread(api, "POST", "/api/send", {"thread": thread, "text": text})
+        if not res.get("ok", True):
+            print(c(RED, f"not sent: {res.get('error') or res}"))
+            return res
+        if res.get("command"):
+            # a slash command answers at once, without a model turn
+            if res.get("reply"):
+                print(f"{c(MAGENTA, 'control:')} {res['reply']}")
+            elif res.get("mission"):
+                mission = res["mission"]
+                print(c(MAGENTA, f"mission {mission.get('id')} started: {mission.get('objective', '')[:120]}"))
+            return res
+        if not to:
+            self.turn_done.clear()
+        return res
+
+    async def wait_turn(self, timeout: float = 900):
+        try:
+            await asyncio.wait_for(self.turn_done.wait(), timeout)
+        except asyncio.TimeoutError:
+            print(c(YELLOW, "still working; leaving it running. Check the app for the result."))
+
+
+async def listen(session: Session, stop: asyncio.Event):
+    backoff = 1.0
+    while not stop.is_set():
+        try:
+            async with websockets.connect(ws_url(), ping_interval=20, max_size=8_000_000) as ws:
+                backoff = 1.0
+                async for raw in ws:
+                    try:
+                        session.handle(json.loads(raw))
+                    except Exception as exc:   # a bad event must not kill the listener
+                        print(c(DIM, f"  (event error: {exc})"))
+        except Exception as exc:
+            if stop.is_set():
+                return
+            session.view.interrupt()
+            print(c(YELLOW, f"connection lost ({type(exc).__name__}); reconnecting"))
+            session.view.restore()
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 10)
+
+
+def history(thread: str, limit: int) -> list[dict]:
+    data = api("GET", f"/api/thread/{urllib.parse.quote(thread, safe=':')}?limit={limit}")
+    return data.get("messages") or data.get("msgs") or (data if isinstance(data, list) else [])
+
+
+async def one_shot(session: Session, text: str):
+    await session.send(text)
+    await session.wait_turn()
+
+
+async def repl(session: Session, state: dict):
+    view = session.view
+    print(c(DIM, f"Mission Control at {URL}. Talking to {view.name(session.agent)}. "
+                 "/help for commands, /quit to leave."))
+    for m in history(session.thread, 8):
+        if m.get("sender") == "user":
+            print(f"{c(GREEN, 'you:')} {(m.get('text') or '').strip()}")
+        else:
+            view.message(m, session.agent)
+    while True:
+        view.prompt = c(GREEN, f"{session.agent} › ")
+        try:
+            line = await asyncio.to_thread(input, view.prompt)
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        view.prompt = ""
+        line = line.strip()
+        if not line:
+            continue
+        if line in ("/quit", "/exit", "/q"):
+            return
+        if line.startswith("/agent"):
+            name = line.split(maxsplit=1)[1].strip().lstrip("@") if " " in line else ""
+            if name not in state["agents"]:
+                print(c(YELLOW, "agents: " + ", ".join(state["agents"])))
+                continue
+            session.agent = name
+            continue
+        to = None
+        if line.startswith("@"):
+            head, _, rest = line[1:].partition(" ")
+            if head in state["agents"] and rest.strip():
+                to, line = head, rest.strip()
+        await session.send(line, to)
+        if not to and not session.turn_done.is_set():
+            await session.wait_turn()
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="mc", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("-a", "--agent", help="agent id to talk to (default: the lead)")
+    ap.add_argument("-u", "--url", help="server address (default MC_URL or http://127.0.0.1:8899)")
+    ap.add_argument("-t", "--token", help="remote-access token (default MC_TOKEN)")
+    ap.add_argument("message", nargs="*", help="send this and exit; omit for a chat session")
+    args = ap.parse_args()
+    global URL, TOKEN
+    if args.url:
+        URL = args.url.rstrip("/")
+    if args.token:
+        TOKEN = args.token
+
+    state = api("GET", "/api/state")
+    agents = {a["id"]: a for a in state.get("agents") or []}
+    if not agents:
+        sys.exit("the server has no agents yet; open the app and add one")
+    agent = args.agent or next(iter(agents))
+    if agent not in agents:
+        sys.exit(f"no agent '{agent}'. Agents: {', '.join(agents)}")
+    view = View(agents)
+    session = Session(agent, view)
+
+    text = " ".join(args.message).strip()
+    if not text and not sys.stdin.isatty():
+        text = sys.stdin.read().strip()
+
+    async def run():
+        stop = asyncio.Event()
+        listener = asyncio.create_task(listen(session, stop))
+        await asyncio.sleep(0.2)     # let the socket open before the first send
+        try:
+            if text:
+                await one_shot(session, text)
+            else:
+                await repl(session, {"agents": list(agents)})
+        finally:
+            stop.set()
+            listener.cancel()
+            try:
+                await listener
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        print()
+
+
+if __name__ == "__main__":
+    main()

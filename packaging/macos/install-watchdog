@@ -1,0 +1,11 @@
+#!/bin/sh
+# Installs the outside watchdog for this checkout and starts it. Run once. It leaves a
+# service you booted out alone, so it never fights you for one you stopped on purpose.
+set -e
+here="$(cd "$(dirname "$0")/../.." && pwd)"
+label=com.missioncontrol.watchdog
+dest="$HOME/Library/LaunchAgents/$label.plist"
+sed "s#__MISSIONCONTROL__#$here#g" "$here/packaging/macos/$label.plist" > "$dest"
+launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$dest"
+launchctl print "gui/$(id -u)/$label" | grep -E "state =" | head -1

@@ -1,0 +1,85 @@
+# Copy to settings.yaml, or just configure everything from the in-app
+# Settings sheet. settings.yaml is gitignored.
+
+# The model your team runs on. Pick local (ollama, lmstudio) or any cloud
+# (minimax, anthropic, openai, custom-openai, custom-anthropic).
+# API keys go in .env, never here.
+llm:
+  provider: minimax
+  model: MiniMax-M3
+  base_url: ""
+  max_tokens: 3000
+
+# Messaging channels. Each routes inbound texts to one of your agents and
+# mirrors that agent's replies back. Secrets go in .env:
+#   iMessage -> BLUEBUBBLES_PASSWORD, Telegram -> TELEGRAM_BOT_TOKEN,
+#   WhatsApp -> WHATSAPP_ACCESS_TOKEN
+channels:
+  imessage:
+    enabled: false
+    server_url: http://localhost:1234
+    allowed_senders: []
+    default_agent: ""
+  telegram:
+    enabled: false
+    allowed_senders: []
+    default_agent: ""
+  whatsapp:
+    enabled: false
+    phone_number_id: ""
+    verify_token: ""
+    allowed_senders: []
+    default_agent: ""
+
+# Optional: watch GitHub repos. Needs the gh CLI authenticated and
+# cloudflared installed; webhooks are created automatically.
+github:
+  enabled: false
+  repos: []
+  route_ci: ""
+  route_code: ""
+  poll_seconds: 300
+  secret: ""
+
+# browser:
+#   headless: true
+
+# Optional: a fast decision model (TypeSafe's Jev) used as a gate in front of
+# expensive model calls — it answers yes/no with a calibrated probability and
+# generates no text. Key goes in .env as TYPESAFE_API_KEY. Every gate keeps its
+# original heuristic as a fallback, so turning this off changes cost, not
+# correctness.
+# decide:
+#   enabled: true
+#   model: jev-latest
+#   guard_terminal: true   # second opinion on commands the blocklist let through
+
+# Optional: Laya, the open-source Jev-compatible decision model, self-hosted on
+# this machine (laya/, Node.js 20+; run `npm install` there once). Decisions are
+# free and stay local; agents use it through the decide tool. The model (~1.7 GB)
+# downloads on first use, loads on the first question and is released when idle.
+# laya:
+#   enabled: true
+#   port: 8935
+#   idle_seconds: 900
+#   node: ""               # path to a Node.js 20+; found automatically when empty
+
+# Optional: archive bulk mail from the Mail inbox every hour, judged by Laya with
+# no LLM. Needs apple.mail and laya. Starts as a dry run that only reports.
+# mail_sweep:
+#   enabled: true
+#   dry_run: true          # report what would be archived; move nothing
+#   every_minutes: 60
+#   bulk_at: 0.7           # a sender is bulk at this share of bulk kinds
+#   keep_at: 0.35          # a bulk sender's message stays at this share of
+#                          # security / needs-action / personal
+#   keep_senders: []       # addresses or domains never archived
+
+# Optional: your own WhatsApp, read-only, linked as a device from Settings >
+# Integrations (needs `npm install` in whatsapp/). See docs/whatsapp.md.
+# whatsapp_link:
+#   enabled: true
+#   groups: false          # direct chats only, plus the groups in include
+#   include: []            # group names recorded even with groups off
+#   ignore: []             # chat names or phone numbers never recorded
+#   keep_days: 90

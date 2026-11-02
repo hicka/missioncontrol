@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copy to ~/Library/LaunchAgents/com.missioncontrol.plist, replace YOURUSER,
+     then: launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.missioncontrol.plist
+     The port and the listening address come from settings.yaml (Settings >
+     Remote access), so they are not repeated here.
+     Note: do not place the project under ~/Desktop or ~/Documents: macOS TCC
+     blocks launchd agents from starting there. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.missioncontrol</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOURUSER/missioncontrol/venv/bin/python</string>
+        <string>/Users/YOURUSER/missioncontrol/server/main.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/YOURUSER/missioncontrol</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/YOURUSER/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/YOURUSER</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/YOURUSER/missioncontrol/missioncontrol.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOURUSER/missioncontrol/missioncontrol.log</string>
+</dict>
+</plist>

@@ -1,0 +1,40 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+# a pull request from a fork runs here too, so nothing in this file gets to write
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest
+      - name: Run tests
+        run: python -m pytest tests/ -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t mc-test .
+      - name: Boot and smoke test
+        run: |
+          docker run -d --name mc -p 8899:8899 -e MC_API_TOKEN=testtoken123456 mc-test
+          for i in $(seq 1 30); do
+            curl -s -o /dev/null http://127.0.0.1:8899/api/state && break; sleep 2
+          done
+          code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8899/api/state)
+          test "$code" = "401" || (echo "expected 401 without token, got $code" && exit 1)
+          code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer testtoken123456" http://127.0.0.1:8899/api/state)
+          test "$code" = "200" || (echo "expected 200 with token, got $code" && docker logs mc && exit 1)
+          echo "container serves and enforces auth"
