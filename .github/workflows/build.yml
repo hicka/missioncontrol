@@ -1,73 +1,172 @@
 name: Build desktop apps
 
+# A release is a tag someone pushed on purpose. Nothing here runs on a plain push, because
+# self-repair pushes to master on its own and installed apps take what is released here.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
 
-# gh release upload needs write access to the release; the default token is read-only.
 permissions:
-  contents: write
+  contents: read
+
+env:
+  FEED_URL: https://github.com/${{ github.repository }}/releases/latest/download/appcast.xml
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt pytest
       - run: python -m pytest tests/ -q
 
-  build:
+  # A draft, so the feed keeps answering with the last complete release until this one
+  # has everything attached. "latest" only moves in the publish job at the end.
+  draft:
+    if: startsWith(github.ref, 'refs/tags/')
     needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            sep: ":"
-            icon: assets/app.icns
-            artifact: MissionControl-macOS
-          - os: windows-latest
-            sep: ";"
-            icon: assets/app.ico
-            artifact: MissionControl-Windows
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --generate-notes --verify-tag
+
+  macos:
+    # On a tag this waits for the draft; run by hand it builds an unsigned app to look at.
+    needs: [test, draft]
+    if: ${{ !cancelled() && needs.test.result == 'success' && (needs.draft.result == 'success' || needs.draft.result == 'skipped') }}
+    runs-on: macos-latest
+    # The signing secrets live in this environment. Pull requests from forks never see them.
+    environment: ${{ startsWith(github.ref, 'refs/tags/') && 'release' || '' }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Install dependencies
         run: pip install -r requirements-desktop.txt
-      - name: Build native macOS app
-        if: runner.os == 'macOS'
-        run: python scripts/build_macos.py
+      - name: Build an unsigned app
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          python scripts/build_macos.py
+          ditto -c -k --sequesterRsrc --keepParent "dist/native/Mission Control.app" MissionControl-macOS.zip
+      - name: Load the signing certificate
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          PASSWORD="$(uuidgen)"
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 7200 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+          echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "$PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/certificate.p12"
+      - name: Build and sign
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          IDENTITY: ${{ vars.MACOS_SIGNING_IDENTITY }}
+          PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+        run: |
+          python scripts/build_macos.py --version "${GITHUB_REF_NAME#v}" --signing-identity "$IDENTITY" \
+            --feed-url "$FEED_URL" --public-key "$PUBLIC_KEY"
+      - name: Notarize and package
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          NOTARY_KEY: ${{ secrets.NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ vars.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ vars.NOTARY_ISSUER }}
+          IDENTITY: ${{ vars.MACOS_SIGNING_IDENTITY }}
+        run: |
+          printf '%s' "$NOTARY_KEY" > "$RUNNER_TEMP/notary.p8"
+          NOTARY=(--key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait --timeout 45m)
+          APP="dist/native/Mission Control.app"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" submit.zip
+          xcrun notarytool submit submit.zip "${NOTARY[@]}"
+          xcrun stapler staple "$APP"
+          # What Sparkle installs, with the ticket stapled in, so it opens offline too.
+          ditto -c -k --sequesterRsrc --keepParent "$APP" MissionControl-macOS.zip
+          # What a person downloads the first time.
+          mkdir dmg && ditto "$APP" "dmg/Mission Control.app" && ln -s /Applications dmg/Applications
+          hdiutil create -volname "Mission Control" -srcfolder dmg -ov -format UDZO MissionControl-macOS.dmg
+          codesign --force --sign "$IDENTITY" --timestamp MissionControl-macOS.dmg
+          xcrun notarytool submit MissionControl-macOS.dmg "${NOTARY[@]}"
+          xcrun stapler staple MissionControl-macOS.dmg
+          rm "$RUNNER_TEMP/notary.p8"
+      - name: Sign the update and write the feed
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          mkdir updates
+          # Last release's archive lets Sparkle make a delta, so a small change is a small
+          # download rather than the whole app with its browser.
+          PREVIOUS="$(gh release view --json tagName --jq .tagName 2>/dev/null || true)"
+          if [ -n "$PREVIOUS" ] && [ "$PREVIOUS" != "$GITHUB_REF_NAME" ]; then
+            gh release download "$PREVIOUS" -p MissionControl-macOS.zip -O "updates/MissionControl-$PREVIOUS.zip" || true
+          fi
+          cp MissionControl-macOS.zip updates/MissionControl-macOS.zip
+          echo "$SPARKLE_PRIVATE_KEY" | build/native/sparkle-*/bin/generate_appcast --ed-key-file - \
+            --download-url-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/" \
+            --maximum-deltas 1 --maximum-versions 1 -o appcast.xml updates
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: MissionControl-macOS
+          path: MissionControl-macOS.zip
+      - name: Attach to the draft
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" MissionControl-macOS.zip MissionControl-macOS.dmg appcast.xml --clobber
+          for delta in updates/*.delta; do
+            if [ -e "$delta" ]; then gh release upload "$GITHUB_REF_NAME" "$delta" --clobber; fi
+          done
+
+  windows:
+    needs: [test, draft]
+    if: ${{ !cancelled() && needs.test.result == 'success' && (needs.draft.result == 'success' || needs.draft.result == 'skipped') }}
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements-desktop.txt
       - name: Build Windows app
-        if: runner.os == 'Windows'
         run: >
           pyinstaller --noconfirm --windowed --name "Mission Control"
           --paths server
-          --icon "${{ matrix.icon }}"
-          --add-data "web${{ matrix.sep }}web"
-          --add-data "assets${{ matrix.sep }}assets"
-          --add-data "bundled_skills${{ matrix.sep }}bundled_skills"
-          --add-data "agents.example.yaml${{ matrix.sep }}."
-          --add-data "settings.example.yaml${{ matrix.sep }}."
+          --icon "assets/app.ico"
+          --add-data "web;web"
+          --add-data "assets;assets"
+          --add-data "bundled_skills;bundled_skills"
+          --add-data "agents.example.yaml;."
+          --add-data "settings.example.yaml;."
           --collect-submodules channels
           --collect-submodules pystray
           desktop.py
-      - name: Package (macOS)
-        if: runner.os == 'macOS'
-        run: ditto -c -k --sequesterRsrc --keepParent "dist/native/Mission Control.app" "${{ matrix.artifact }}.zip"
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
+      - name: Package
         shell: pwsh
-        run: Compress-Archive -Path "dist/Mission Control" -DestinationPath "${{ matrix.artifact }}.zip" -Force
-      - name: Installer (Windows)
-        if: runner.os == 'Windows'
+        run: Compress-Archive -Path "dist/Mission Control" -DestinationPath "MissionControl-Windows.zip" -Force
+      - name: Installer
         shell: pwsh
         run: |
           $ver = if ($env:GITHUB_REF -like 'refs/tags/*') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '1.0.0' }
@@ -75,23 +174,28 @@ jobs:
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           & $iscc "/DAppVersion=$ver" "packaging\windows\installer.iss"
           Copy-Item "MissionControl-Setup.exe" "MissionControl-Windows-Setup.exe"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}.zip
-      - name: Upload installer (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+          name: MissionControl-Windows
+          path: MissionControl-Windows.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: MissionControl-Windows-Setup
           path: MissionControl-Windows-Setup.exe
-      - name: Attach to release
+      - name: Attach to the draft
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.ref_name }}" "${{ matrix.artifact }}.zip" --clobber
-      - name: Attach installer to release (Windows)
-        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/')
-        env:
+        run: gh release upload "$env:GITHUB_REF_NAME" MissionControl-Windows.zip MissionControl-Windows-Setup.exe --clobber
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.ref_name }}" "MissionControl-Windows-Setup.exe" --clobber
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest
