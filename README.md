@@ -158,8 +158,9 @@ These work in the app and on messaging channels. Most answer without a model cal
 
 ## Other ways to run it
 
-**Desktop apps.** The macOS app has a native host, a Runtime Manager and a menu bar
-icon, and keeps its data in your user profile. Build it with
+**Desktop apps.** The macOS app is fully native, with an always-on floating bar for
+talking to the agent and seeing what it is doing (`⌥Space`), and it keeps itself up to date
+from signed releases. Its data stays in your user profile. Build it with
 `./venv/bin/python scripts/build_macos.py`, or see the
 [native macOS guide](docs/native-macos.md). macOS and Windows builds also come out of
 the [build workflow](.github/workflows/build.yml).
@@ -193,8 +194,8 @@ build yet, so you build and sign your own.
 | --- | --- |
 | `server/` | The FastAPI backend: kernel, model layer, channels, scheduler and tools |
 | `server/router.py`, `workers.py`, `triggers.py`, `watchdog.py` | The heart of the kernel ([design](docs/super-agent.md)) |
-| `web/` | The workspace UI, with no build step |
-| `native/macos/`, `packaging/` | The native macOS host and installers |
+| `web/` | The workspace UI for browsers and remote access, with no build step |
+| `native/macos/`, `packaging/` | The native macOS app and installers |
 | `bin/` | `mc`, the outside watchdog, and small CLIs for Envoyer, Forge and Meta |
 | `bundled_skills/` | Starter procedures seeded into your skill library |
 | `whatsapp/`, `laya/` | Optional Node services: a WhatsApp bridge and a local decision model |
