@@ -93,6 +93,8 @@ def main():
     except OSError:
         print(f"App port {settings.port('app')} is occupied. Choose another port in Runtime Manager.", file=sys.stderr)
         return 78
+    import selfupdate
+    selfupdate.note_app_version(os.environ.get("MISSIONCONTROL_APP_VERSION"))
     from main import app, bind_host
     uvicorn.run(app, host=bind_host(), port=settings.port("app"), log_level="info", use_colors=False,
                 timeout_graceful_shutdown=4)

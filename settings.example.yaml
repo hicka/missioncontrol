@@ -83,3 +83,11 @@ github:
 #   include: []            # group names recorded even with groups off
 #   ignore: []             # chat names or phone numbers never recorded
 #   keep_days: 90
+
+# A source checkout can follow GitHub. It only fast-forwards a clean master, waits until
+# nothing is running, and rolls back a version that does not come back up. "release"
+# follows tagged releases; "master" follows every push. The signed app updates itself
+# and ignores this.
+updates:
+  auto: false
+  channel: release
