@@ -4,6 +4,8 @@ import SwiftUI
 struct ShellView: View {
     @Environment(Store.self) private var store
     let runtime: RuntimeModel
+    /// The settings read that found no model ready, while the welcome is up.
+    @State private var welcome: JSON?
 
     var body: some View {
         NavigationSplitView {
@@ -17,6 +19,19 @@ struct ShellView: View {
         .overlay(alignment: .bottom) { ToastStack() }
         .overlay { CommandPaletteHost() }
         .onChange(of: store.route, initial: true) { _, route in runtime.managerVisible = route == .runtime }
+        .sheet(isPresented: Binding(get: { welcome != nil }, set: { if !$0 { welcome = nil } })) {
+            if let welcome {
+                WelcomeView(full: welcome) { WelcomeGate.skipped = true; self.welcome = nil }.environment(store)
+            }
+        }
+        .task(id: store.live) { await checkWelcome() }
+    }
+
+    /// Once the runtime has answered, a missing model brings up the welcome, as the web does.
+    private func checkWelcome() async {
+        guard store.live, welcome == nil, !WelcomeGate.skipped, let api = store.api,
+              let full = try? await SettingsCache.read(api, SettingsCache.full), !full.llm.ready.flag else { return }
+        welcome = full
     }
 
     @ViewBuilder private var detail: some View {
