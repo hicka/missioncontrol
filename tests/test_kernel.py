@@ -49,6 +49,12 @@ def say(text):
 
 
 def call(_tool, **inputs):
+    # A finished report on asked-for work needs its finish line, as a real model now gives
+    # one. Tests about the finish line itself pass checks of their own, or checks=None.
+    if _tool == "report" and inputs.get("status") == "ready" and "checks" not in inputs:
+        inputs["checks"] = [{"check": "what was asked", "done": True, "how": "seen in the test"}]
+    if "checks" in inputs and inputs["checks"] is None:
+        inputs.pop("checks")
     return {"content": [{"type": "tool_use", "id": f"call_{uuid.uuid4().hex[:10]}", "name": _tool, "input": inputs}],
             "stop_reason": "tool_use"}
 

@@ -106,6 +106,16 @@ say, they go to the Router marked as unconfirmed. Direct lines and scheduled run
 exceptions: there the plain answer is the whole point. Silence is fine after a notice, but
 when someone is owed an answer it gets the same reminder, and then a `failed` report.
 
+Work a person asked for has a finish line: what they asked for, as a few checks in their
+words, each done or not, with how it was confirmed. The Worker gives it in `checks`, first
+report onwards, and it is kept with the session: a report that leaves a check out leaves it as
+it was, so none can go by saying nothing. `ready` is refused until every check is done with how,
+and a way of confirming that names an id the Worker never saw is marked unverified. A Worker
+that stops with checks still open, after a progress report or plain words, is not filed as
+done: it becomes `blocked`, asking the owner whether it should carry on, with what is left.
+The Router sees the finish line in each report and its count on the board. Direct lines,
+scheduled runs, work done ahead of time and work from outside events have none.
+
 `waiting` is not an ending: the Worker stays where it is, with its authority, whatever it adds
 afterwards. It is only true of something that will wake it (a job, a watch, a held approval, an
 event on a thread that can still bring news), and it is told at once when nothing will. If it

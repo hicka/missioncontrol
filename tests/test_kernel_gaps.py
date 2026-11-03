@@ -401,6 +401,111 @@ def test_a_handback_keeps_its_watches(isolated, monkeypatch):
     asyncio.run(main())
 
 
+# ---------- the finish line: asked-for work is done when what was asked is confirmed ----------
+
+SHOTS = {"check": "ten App Store screenshots captured", "done": True, "how": "ls shows 10 png files"}
+
+
+def told(row_id):
+    return json.dumps(store.log_all(row_id, 80))
+
+
+def test_ready_on_asked_for_work_needs_its_finish_line(isolated, monkeypatch):
+    model = Hold(monkeypatch)
+    model.worker = [call("report", status="ready", summary="Done.", checks=None),
+                    call("report", status="ready", summary="Done.", checks=[SHOTS]), say("NO_REPLY")]
+
+    async def main():
+        o = make(monkeypatch)
+        row = await o.workers.spawn(second(o), "Capture the screenshots", "", [])
+        await until(lambda: store.reports_of(row["id"]))
+        reports = store.reports_of(row["id"])
+        assert len(reports) == 1 and reports[0]["status"] == "ready"
+        assert reports[0]["checks"][0]["check"] == SHOTS["check"] and reports[0]["checks"][0]["done"]
+        assert "ready needs the finish line" in told(row["id"])
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_a_check_left_open_keeps_it_from_being_ready(isolated, monkeypatch):
+    # Leaving a check out of the ready report does not make it go away.
+    model = Hold(monkeypatch)
+    model.worker = [call("report", status="progress", summary="Half way.",
+                         checks=[{"check": "the fix is pushed", "done": True, "how": "git log shows it on origin"},
+                                 {"check": "the release notes are written", "done": False}]),
+                    call("report", status="ready", summary="All done."),
+                    call("report", status="failed", summary="Could not write the notes: no changelog."), say("NO_REPLY")]
+
+    async def main():
+        o = make(monkeypatch)
+        row = await o.workers.spawn(second(o), "Ship it", "", [])
+        await until(lambda: store.reports_of(row["id"]) and store.reports_of(row["id"])[0]["status"] == "failed")
+        assert [r["status"] for r in store.reports_of(row["id"])] == ["failed", "progress"]
+        assert "Still open: the release notes are written" in told(row["id"])
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_stopping_short_asks_the_owner_instead_of_finishing(isolated, monkeypatch):
+    # The case that started this: progress at nought of ten, then plain words, filed as done.
+    model = Hold(monkeypatch)
+    model.worker = [call("report", status="progress", summary="Starting on the screenshots.",
+                         checks=[{"check": "ten App Store screenshots captured", "done": False}]),
+                    say("Holding on the screenshot update."), say("Holding on the screenshot update.")]
+
+    async def main():
+        o = make(monkeypatch)
+        aid = second(o)
+        mission = runtime_store.mission_create(aid, f"dm:{o.lead}", "screenshots")
+        row = await o.workers.spawn(aid, "Capture the screenshots", "", [asked(o)], mission=mission["id"])
+        await until(lambda: store.session_get(row["id"])["status"] == "blocked")
+        last = store.reports_of(row["id"], 1)[0]
+        assert last["status"] == "blocked" and "ten App Store screenshots captured" in last["question"]
+        assert runtime_store.mission_get(mission["id"])["status"] == "waiting"
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_work_nobody_asked_for_finishes_as_before(isolated, monkeypatch):
+    model = Hold(monkeypatch)
+    model.worker = [call("report", status="ready", summary="CI is green again.", checks=None), say("NO_REPLY")]
+
+    async def main():
+        o = make(monkeypatch)
+        row = await o.workers.spawn(second(o), "Fix CI", "", [], strength="inferred")
+        await until(lambda: store.reports_of(row["id"]))
+        assert store.reports_of(row["id"])[0]["status"] == "ready"
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_the_router_reads_the_finish_line_and_what_is_unverified(isolated, monkeypatch):
+    Hold(monkeypatch)
+
+    async def main():
+        o = make(monkeypatch)
+        row = store.session_create("worker", second(o), title="Deploy", status="waiting",
+                                   meta={"finish_line": [{"check": "deployed", "done": True, "how": "ok"},
+                                                         {"check": "smoke test passes", "done": False, "how": ""}]})
+        assert "Deploy (finish line 1 of 2)" in o.router.task_board()
+        report = store.report_deliver(row["id"], None, "ready", "Deployed.", checks=[
+            {"check": "deployed", "done": True, "how": "deployment 41293345 finished", "unverified": True}])
+        line = o.router._line({"kind": "report", "ref": report["id"]})
+        assert "finish line, 1 of 1 done:" in line and "done: deployed (deployment 41293345 finished)" in line
+        assert "[unverified" in line
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_a_way_of_confirming_that_names_an_unseen_id_is_marked_unverified():
+    import workers
+    merged = workers.merge_checks([], [{"check": "deployed", "done": True, "how": "deployment 41293345 finished"}], [])
+    assert merged[0]["unverified"]
+    seen = workers.merge_checks([], [{"check": "deployed", "done": True, "how": "deployment 41293345 finished"}],
+                                ["Deployment 41293345 finished at 14:02"])
+    assert not seen[0]["unverified"]
+
+
 def test_the_board_comes_back_after_compaction(isolated, monkeypatch):
     model = Hold(monkeypatch)
     monkeypatch.setattr(llm, "quick", AsyncMock(return_value="digest"))
