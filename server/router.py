@@ -498,8 +498,8 @@ class Router(sess.Session):
         report = await asyncio.to_thread(store.report_add, worker.id, worker.mission, "blocked", text)
         await self.take_report(report, worker.row)
 
-    async def notify_owner(self, text: str) -> dict:
-        return await self._send_owner(text)
+    async def notify_owner(self, text: str, meta: dict | None = None) -> dict:
+        return await self._send_owner(text, meta=meta)
 
     async def aware(self, text: str):
         """Something it should know the next time it reads, that needs no decision now."""
@@ -817,8 +817,8 @@ class Router(sess.Session):
         words = len((text or "").split())
         return words if cap and words > cap else 0
 
-    async def _send_owner(self, text: str, files: list | None = None) -> dict:
-        return await self.orch.deliver(self.orch.owner_thread(), text, sender=self.profile, files=files)
+    async def _send_owner(self, text: str, files: list | None = None, meta: dict | None = None) -> dict:
+        return await self.orch.deliver(self.orch.owner_thread(), text, sender=self.profile, files=files, meta=meta)
 
     # ---------- tools ----------
 

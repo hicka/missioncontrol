@@ -240,6 +240,26 @@ def test_a_held_command_pushes_when_no_channel_carried_it(isolated, monkeypatch)
     asyncio.run(main())
 
 
+def test_a_held_command_notice_names_its_approval_and_stays_one_bubble(isolated, monkeypatch):
+    # The app draws the held command itself from the id, live, so the notice has to carry
+    # it, and a blank line in the command must not split the notice into pieces.
+    model = Hold(monkeypatch)
+    monkeypatch.setattr(push, "notify", AsyncMock(return_value=True))
+
+    async def main():
+        o = make(monkeypatch)
+        model.worker = [call("terminal", command="git status\n\ngit push origin main"), say("NO_REPLY")]
+        await o.workers.spawn(second(o), "t", "", [], strength="inferred")
+        await until(lambda: runtime_store.approvals("pending"))
+        held = runtime_store.approvals("pending")[0]
+        await until(lambda: any(m["meta"].get("approval") for m in chat(o, sender=o.lead)))
+        notices = [m for m in chat(o, sender=o.lead) if "git push origin main" in m["text"] or "needs your OK" in m["text"]]
+        assert len(notices) == 1
+        assert notices[0]["meta"]["approval"] == held["id"]
+        await wind_down(o)
+    asyncio.run(main())
+
+
 def test_the_guard_inside_the_terminal_announces_its_holds_too(isolated, monkeypatch):
     model = Hold(monkeypatch)
     monkeypatch.setattr(push, "notify", AsyncMock(return_value=True))
