@@ -302,3 +302,24 @@ def test_startup_port_probe_allows_time_wait_but_not_a_live_listener():
         worker.check_port(port)
     finally:
         connection.close(); client.close(); listener.close()
+
+
+def test_every_service_the_server_registers_can_start(monkeypatch):
+    """A service's run is only called as it starts, which tests with the services switched
+    off never reach. The updates service once shipped naming a module main.py had not
+    imported, and failed on the first machine that started it."""
+    import auth_channels
+    import browser_auth
+    import main
+    monkeypatch.setattr(runtime, 'registry', runtime.registry)
+    monkeypatch.setattr(browser_auth, 'emit', getattr(browser_auth, 'emit', None), raising=False)
+    monkeypatch.setattr(auth_channels, 'source_for', getattr(auth_channels, 'source_for', None), raising=False)
+    registry = main.configure_runtime()
+    started = []
+    for service in registry.services.values():
+        if service.run:
+            job = service.run()
+            assert asyncio.iscoroutine(job), service.id
+            job.close()
+            started.append(service.id)
+    assert 'updates' in started

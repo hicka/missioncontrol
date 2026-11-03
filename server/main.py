@@ -30,6 +30,7 @@ import skills as skills_mod
 import commands as commands_mod
 import evolve
 import selfimprove
+import selfupdate
 import kernel_store as kernel
 import recall as recall_mod
 import triggers as triggers_mod
@@ -1910,14 +1911,12 @@ class UpdatesBody(BaseModel):
 
 @app.get("/api/updates")
 async def updates_status():
-    import selfupdate
     config = selfupdate.settings()
     return {**selfupdate.status, "auto": config["auto"], "channel": config["channel"]}
 
 
 @app.put("/api/updates")
 async def updates_settings(body: UpdatesBody):
-    import selfupdate
     changes = body.model_dump(exclude_none=True)
     if changes:
         cfg.update("updates", changes)
@@ -1927,7 +1926,6 @@ async def updates_settings(body: UpdatesBody):
 @app.post("/api/updates/check")
 async def updates_check(install: bool = False):
     """Look now. With install, move to what is found even if automatic updates are off."""
-    import selfupdate
     return {"ok": True, **await selfupdate.check(orch, True if install else None)}
 
 
