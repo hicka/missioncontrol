@@ -93,6 +93,26 @@ def test_the_owner_cannot_approve_past_the_self_checkout_guard():
     assert "improve tool" in out
 
 
+def test_one_request_reads_as_it_stands_now(monkeypatch, client):
+    """The chat's card for a held command reads this, so it follows the answer."""
+    row = _held(monkeypatch, command="echo card-output")
+    waiting = client.get(f"/api/approvals/{row['id']}").json()["approval"]
+    assert waiting["status"] == "pending" and waiting["command"] == "echo card-output"
+    client.post(f"/api/approvals/{row['id']}/approve")
+    ran = client.get(f"/api/approvals/{row['id']}").json()["approval"]
+    assert ran["status"] == "ran" and "card-output" in ran["result"]
+    assert not client.get("/api/approvals/nope").json()["ok"]
+
+
+def test_a_secret_in_the_output_never_reaches_the_card(monkeypatch, client):
+    import secret_mask
+    secret_mask.protect("tok-5f2a9c81e7")
+    row = _held(monkeypatch, command="echo tok-5f2a9c81e7")
+    client.post(f"/api/approvals/{row['id']}/approve")
+    ran = client.get(f"/api/approvals/{row['id']}").json()["approval"]
+    assert "tok-5f2a9c81e7" not in ran["result"]
+
+
 def test_an_unknown_request_is_refused(client):
     assert not client.post("/api/approvals/nope/approve").json()["ok"]
 

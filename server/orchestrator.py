@@ -1106,11 +1106,14 @@ class Orchestrator:
     def direct_thread(self, aid: str) -> str:
         return self._direct_threads.get(aid) or f"dm:{aid}"
 
-    async def deliver(self, thread_id: str, text: str, sender: str | None = None, files: list | None = None) -> dict:
+    async def deliver(self, thread_id: str, text: str, sender: str | None = None, files: list | None = None,
+                      meta: dict | None = None) -> dict:
         """The one way anything reaches a person. It lands in the app's conversation,
         and also on the phone channel the thread came from. Says how that went:
         sent is True or False for a channel and None without one, and pushed says a
-        notification went out."""
+        notification went out. `meta` says what the words are about, such as the held
+        command a notice announces, so the app can draw that instead. A notice like
+        that stays one bubble."""
         sender = sender or self.lead
         thread = await asyncio.to_thread(store.thread_get, thread_id) or {}
         address = thread.get("address") or {}
@@ -1123,13 +1126,18 @@ class Orchestrator:
         channel, chat = address.get("channel"), address.get("chat")
         attachments = [await self._attachment(path) for path in files or []]
         attachments = [a for a in attachments if a]
-        parts = split_reply(text) or ([("", None)] if attachments else [])
+        if meta:
+            parts = [(text.strip(), None)]
+        else:
+            parts = split_reply(text) or ([("", None)] if attachments else [])
         outcome = {"sent": None, "pushed": False, "channel": channel, "error": ""}
         for i, (part, part_meta) in enumerate(parts):
-            meta = dict(part_meta or {})
-            if attachments and i == 0:
-                meta["attachments"] = [a[0] for a in attachments]
-            await self._post(conversation, sender, part, meta=meta or None)
+            posted = dict(part_meta or {})
+            if i == 0:
+                posted.update(meta or {})
+                if attachments:
+                    posted["attachments"] = [a[0] for a in attachments]
+            await self._post(conversation, sender, part, meta=posted or None)
             if part:
                 relayed = await self._relay(channel, chat, conversation, sender, part)
                 if relayed.get("sent") is not None:
@@ -1207,14 +1215,14 @@ class Orchestrator:
             who = self.agents.get(request["agent"], {}).get("name", request["agent"] or "An agent")
             what = recall.inline(request["command"], 200)
             await self._ask_owner(f"approval:{request['id']}", f"{who} needs your OK to run: {what}\nIt's in your Inbox.",
-                                  f"{who}: {what}")
+                                  f"{who}: {what}", meta={"approval": request["id"]})
             await self.router.aware(f"{who} is waiting on the owner's approval, and they have been told: {what}")
         except Exception:
             logger.exception("could not announce the hold on %s", request.get("id"))
 
-    async def _ask_owner(self, key: str, line: str, short: str):
+    async def _ask_owner(self, key: str, line: str, short: str, meta: dict | None = None):
         """Their chat and phone channel, and a push unless it has already buzzed them."""
-        reached = await self.router.notify_owner(line)
+        reached = await self.router.notify_owner(line, meta=meta)
         if not reached.get("pushed") and reached.get("sent") is not True:
             await push.notify(key, "Needs your OK", short, force=True)
 

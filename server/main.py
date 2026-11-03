@@ -2016,6 +2016,22 @@ async def approvals_list():
             "agents": {aid: a["name"] for aid, a in orch.agents.items()}}
 
 
+@app.get("/api/approvals/{aid}")
+async def approval_one(aid: str):
+    """One held command as it stands now, for the card the chat draws in place of its
+    notice: still waiting, declined, or run and what it printed."""
+    import secret_mask
+    row = await asyncio.to_thread(runtime_store.approval_get, aid)
+    if not row:
+        return {"ok": False, "error": "no such request"}
+    if row["status"] == "pending":
+        row["prior"] = _approval_context(row, await asyncio.to_thread(runtime_store.approvals))
+    session = await asyncio.to_thread(kernel.session_get, row["session"]) if row.get("session") else None
+    row["task"] = (session or {}).get("title") or ""
+    row["result"] = secret_mask.redact(row.get("result") or "")
+    return {"ok": True, "approval": row}
+
+
 @app.post("/api/approvals/{aid}/{action}")
 async def approval_action(aid: str, action: str):
     """Approve or decline one held command. Approving runs it as written."""
