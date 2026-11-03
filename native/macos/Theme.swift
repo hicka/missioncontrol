@@ -197,6 +197,7 @@ extension View {
 /// here and each is drawn natively, with results kept so a long thread does not reparse.
 enum MDBlock: Hashable {
     case paragraph(String), heading(Int, String), bullets([String]), numbered([String]), quote(String), code(String), rule
+    case table([String], [[String]])
 }
 
 enum Markdown {
@@ -213,8 +214,14 @@ enum Markdown {
 
     static func parse(_ text: String) -> [MDBlock] {
         var blocks: [MDBlock] = [], paragraph: [String] = [], bullets: [String] = [], numbered: [String] = [], quote: [String] = []
-        var code: [String]?
+        var code: [String]?, table: [String] = []
+        func flushTable() {
+            guard !table.isEmpty else { return }
+            if let parsed = Self.table(table) { blocks.append(parsed) } else { paragraph.append(contentsOf: table) }
+            table = []
+        }
         func flush() {
+            flushTable()
             if !paragraph.isEmpty { blocks.append(.paragraph(paragraph.joined(separator: "\n"))); paragraph = [] }
             if !bullets.isEmpty { blocks.append(.bullets(bullets)); bullets = [] }
             if !numbered.isEmpty { blocks.append(.numbered(numbered)); numbered = [] }
@@ -228,6 +235,11 @@ enum Markdown {
                 continue
             }
             if code != nil { code?.append(line); continue }
+            if trimmed.hasPrefix("|"), trimmed.dropFirst().contains("|") {
+                if table.isEmpty { flush() }
+                table.append(trimmed); continue
+            }
+            flushTable()
             if trimmed.isEmpty { flush(); continue }
             if trimmed == "---" || trimmed == "***" { flush(); blocks.append(.rule); continue }
             if trimmed.hasPrefix("#"), let space = trimmed.firstIndex(of: " "), trimmed[..<space].allSatisfy({ $0 == "#" }) {
@@ -252,6 +264,26 @@ enum Markdown {
         return blocks
     }
 
+    /// A pipe table counts only with the line of dashes under its header. Without one, the
+    /// lines are left as written.
+    private static func table(_ lines: [String]) -> MDBlock? {
+        func cells(_ line: String) -> [String] {
+            var inner = Substring(line)
+            if inner.hasPrefix("|") { inner = inner.dropFirst() }
+            if inner.hasSuffix("|") { inner = inner.dropLast() }
+            return inner.split(separator: "|", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+        }
+        guard lines.count >= 2 else { return nil }
+        let rule = cells(lines[1])
+        guard !rule.isEmpty, rule.allSatisfy({ cell in cell.count >= 3 && cell.allSatisfy { "-:".contains($0) } }) else { return nil }
+        let header = cells(lines[0])
+        let rows = lines.dropFirst(2).map { row in
+            let values = cells(row)
+            return (0..<header.count).map { $0 < values.count ? values[$0] : "" }
+        }
+        return .table(header, rows)
+    }
+
     static func inline(_ text: String) -> AttributedString {
         var out = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
         linkAddresses(&out)
@@ -261,20 +293,45 @@ enum Markdown {
     private static let address = try? NSRegularExpression(pattern: #"https?://[^\s<>"]+"#)
 
     /// Agents write addresses as plain text. Punctuation after one is not part of it, and
-    /// an address inside code stays code.
+    /// an address inside code stays code. A long one shows as its site and last part, so
+    /// a sentence is not mostly address; the link still goes to all of it.
     private static func linkAddresses(_ text: inout AttributedString) {
         let plain = String(text.characters)
         guard plain.contains("://"), let address else { return }
-        for match in address.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)) {
+        // From the end, so shortening one does not move the ones before it.
+        for match in address.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)).reversed() {
             guard let found = Range(match.range, in: plain) else { continue }
             var written = String(plain[found])
             while let last = written.last, ".,;:!?)]}'\"".contains(last) { written.removeLast() }
             guard !written.isEmpty, let target = URL(string: written) else { continue }
             let start = text.characters.index(text.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: found.lowerBound))
             guard let end = text.characters.index(start, offsetBy: written.count, limitedBy: text.endIndex) else { continue }
-            let taken = text[start..<end].runs.contains { $0.link != nil || $0.inlinePresentationIntent?.contains(.code) == true }
-            if !taken { text[start..<end].link = target }
+            // Code stays as written, and so does a link given words of its own. One the
+            // parser linked by itself is just the address, and is shortened like any other.
+            let runs = text[start..<end].runs
+            let taken = runs.contains { $0.inlinePresentationIntent?.contains(.code) == true || ($0.link != nil && $0.link != target) }
+            guard !taken else { continue }
+            let label = shortAddress(target)
+            if label != written {
+                var shown = AttributedString(label)
+                shown.mergeAttributes(text[start..<end].runs.first?.attributes ?? AttributeContainer())
+                text.replaceSubrange(start..<end, with: shown)
+                guard let shownEnd = text.characters.index(start, offsetBy: label.count, limitedBy: text.endIndex) else { continue }
+                text[start..<shownEnd].link = target
+            } else {
+                text[start..<end].link = target
+            }
         }
+    }
+
+    /// `raw.githubusercontent.com/…/bundledNativeModules.json` for a 90-character address.
+    static func shortAddress(_ url: URL) -> String {
+        let full = url.absoluteString
+        guard full.count > 48, var host = url.host else { return full }
+        if host.hasPrefix("www.") { host.removeFirst(4) }
+        let parts = url.path.split(separator: "/")
+        guard let last = parts.last else { return host }
+        return parts.count > 1 ? "\(host)/…/\(last)" : "\(host)/\(last)"
     }
 }
 
@@ -317,13 +374,30 @@ struct MarkdownView: View {
         case .quote(let text):
             Text(Markdown.inline(text)).foregroundStyle(.secondary).padding(.leading, 10)
                 .overlay(alignment: .leading) { Rectangle().fill(MC.line).frame(width: 2) }
-        case .code(let code):
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(code).font(.system(size: size - 1, design: .monospaced)).padding(10)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        case .code(let code): CodeBlock(code: code, size: size - 1)
+        case .table(let header, let rows): table(header, rows)
         case .rule: Divider()
+        }
+    }
+
+    private func table(_ header: [String], _ rows: [[String]]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 0) {
+                GridRow {
+                    ForEach(Array(header.enumerated()), id: \.offset) { _, cell in
+                        Text(Markdown.inline(cell)).font(.system(size: size - 1, weight: .medium)).foregroundStyle(.secondary).padding(.vertical, 5)
+                    }
+                }
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    Divider().gridCellUnsizedAxes(.horizontal)
+                    GridRow {
+                        ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                            Text(Markdown.inline(cell)).font(.system(size: size - 0.5)).padding(.vertical, 5)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 2)
         }
     }
 
@@ -336,5 +410,45 @@ struct MarkdownView: View {
                 }
             }
         }
+    }
+}
+
+/// Code in a reply: copyable, and a long block folds to its first lines until asked.
+struct CodeBlock: View {
+    let code: String
+    var size: CGFloat = 12
+    var folded = 12
+    @State private var open = false
+    @State private var copied = false
+
+    var body: some View {
+        let lines = code.components(separatedBy: "\n")
+        let long = lines.count > folded + 2
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text(lines.count == 1 ? "1 line" : "\(lines.count) lines").font(.system(size: 11)).foregroundStyle(.secondary)
+                Spacer()
+                Button(copied ? "Copied" : "Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(code, forType: .string)
+                    copied = true
+                    Task { try? await Task.sleep(nanoseconds: 1_400_000_000); copied = false }
+                }
+                .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 2)
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(long && !open ? lines.prefix(folded).joined(separator: "\n") : code)
+                    .font(.system(size: size, design: .monospaced))
+                    .padding(.horizontal, 10).padding(.bottom, long ? 4 : 9)
+            }
+            if long {
+                Button(open ? "Show less" : "Show all \(lines.count) lines") { open.toggle() }
+                    .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .padding(.horizontal, 10).padding(.bottom, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }

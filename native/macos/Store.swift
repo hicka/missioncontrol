@@ -158,6 +158,9 @@ final class Store {
     var workers: [JSON] = []
     var agentInfo: JSON = .null
 
+    /// Held commands the conversation draws as cards, by id, as the server last said.
+    var approvalCards: [String: JSON] = [:]
+
     var states: [String: String] = [:]
     var tools: [String: String] = [:]
     var streams: [String: StreamText] = [:]
@@ -353,7 +356,11 @@ final class Store {
         case "browser_auth_updated", "browser_updated":
             ticks.browser += 1
             refreshSoon()
-        case "watch_updated", "cron_updated", "approvals_updated":
+        case "approvals_updated":
+            refreshSoon()
+            let shown = Array(approvalCards.keys)
+            Task { for id in shown { await loadApproval(id) } }
+        case "watch_updated", "cron_updated":
             refreshSoon()
         default:
             break
@@ -426,6 +433,16 @@ final class Store {
             notify("Still running. The task will have the output.")
         }
         refreshSoon(after: 0.05)
+        await loadApproval(id)
+    }
+
+    /// One held command as it stands now. False when the server could not say, such as
+    /// one too old to know the request at all.
+    @discardableResult
+    func loadApproval(_ id: String) async -> Bool {
+        guard let api, let reply = try? await api.get("/api/approvals/\(API.escape(id))"), !reply.approval.isNull else { return false }
+        if approvalCards[id] != reply.approval { approvalCards[id] = reply.approval }
+        return true
     }
 
     func notify(_ text: String, error: Bool = false) {

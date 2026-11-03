@@ -695,6 +695,7 @@ private struct OpenBar: View {
                 if let item = bar.reviewing {
                     ReviewPane(item: item, bar: bar)
                 } else {
+                    if let away = AwayLine.since(store) { AwayLine(since: away, bar: bar); divider }
                     if !store.inbox.isEmpty { NeedsStrip(bar: bar); divider }
                     if !openWorkers.isEmpty { TaskStrip(workers: openWorkers); divider }
                     if let id = store.leadThread { Conversation(model: store.thread(id), threadID: id) }
@@ -769,6 +770,44 @@ private func kindInfo(_ kind: String) -> (icon: String, label: String) {
     case "lesson": return ("flask", "Lesson needs a decision")
     case "question": return ("questionmark.bubble", "A worker needs your answer")
     default: return ("tray", kind)
+    }
+}
+
+/// After a long absence, what finished meanwhile, in one line. It goes once the owner says
+/// something, because from then on the conversation itself is the record.
+private struct AwayLine: View {
+    @Environment(Store.self) private var store
+    let since: Double
+    let bar: BarModel
+    private static let absence: Double = 3 * 3600
+
+    /// When the owner last spoke, if that was long enough ago and tasks ended since.
+    static func since(_ store: Store) -> Double? {
+        guard let thread = store.leadThread,
+              let last = store.thread(thread).messages.last(where: { $0.sender == "user" })?.ts,
+              Date().timeIntervalSince1970 - last >= absence else { return nil }
+        return store.missions.contains { $0.updated.num > last && ["completed", "failed"].contains($0.status.str) } ? last : nil
+    }
+
+    var body: some View {
+        let ended = store.missions.filter { $0.updated.num > since }
+        let finished = ended.filter { $0.status.str == "completed" }.count
+        let failed = ended.filter { $0.status.str == "failed" }.count
+        Button { store.go(.tasks); bar.collapse() } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "clock").foregroundStyle(.white.opacity(0.55)).accessibilityHidden(true)
+                Text("Since \(TimeDivider.label(since).replacingOccurrences(of: "Today ", with: ""))").foregroundStyle(.white.opacity(0.62))
+                if finished > 0 { Text("·").foregroundStyle(.white.opacity(0.4)); Text("\(finished) finished").foregroundStyle(.white) }
+                if failed > 0 { Text("·").foregroundStyle(.white.opacity(0.4)); Text("\(failed) failed").foregroundStyle(MC.danger) }
+                Spacer()
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.white.opacity(0.35)).accessibilityHidden(true)
+            }
+            .font(.system(size: 12))
+            .padding(.horizontal, 18).padding(.vertical, 9)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Since you were last here: \(finished) finished, \(failed) failed. Open Tasks.")
     }
 }
 
@@ -857,21 +896,9 @@ private struct TaskStrip: View {
     var body: some View {
         VStack(spacing: 1) {
             ForEach(workers.prefix(3)) { worker in
-                HStack(spacing: 10) {
-                    AgentBadge(agent: store.agent(worker.profile.str), size: 18)
-                    Button {
-                        store.focusWorker = worker.id
-                        store.go(.activity)
-                    } label: {
-                        Text(clip(worker.title.str.isEmpty ? "Task" : worker.title.str, 58)).font(.system(size: 12.5)).foregroundStyle(.white).lineLimit(1)
-                    }.buttonStyle(.plain)
-                    Spacer()
-                    Text(ago(worker.updated.num)).font(.system(size: 11)).foregroundStyle(.white.opacity(0.4))
-                    Pill(status: worker.status.str)
-                    if worker.status.str == "working" {
-                        Button { Task { await store.stopWorker(worker.id) } } label: { Image(systemName: "stop.fill").font(.system(size: 9)) }
-                            .buttonStyle(.plain).foregroundStyle(.white.opacity(0.6)).help("Stop this task").accessibilityLabel("Stop this task")
-                    }
+                VStack(alignment: .leading, spacing: 4) {
+                    row(worker)
+                    StepTrail(steps: steps(of: worker)).padding(.leading, 28)
                 }
                 .padding(.horizontal, 10).padding(.vertical, 5)
             }
@@ -881,6 +908,71 @@ private struct TaskStrip: View {
             }
         }
         .padding(8)
+    }
+
+    /// The task's tool steps so far, oldest first.
+    private func steps(of worker: JSON) -> [JSON] {
+        let mission = worker.mission.str
+        guard !mission.isEmpty else { return [] }
+        return store.executions.filter { $0.mission.str == mission && $0.agent.str == worker.profile.str }.sorted { $0.ts.num < $1.ts.num }
+    }
+
+    private func row(_ worker: JSON) -> some View {
+        HStack(spacing: 10) {
+            AgentBadge(agent: store.agent(worker.profile.str), size: 18)
+            Button {
+                store.focusWorker = worker.id
+                store.go(.activity)
+            } label: {
+                Text(clip(worker.title.str.isEmpty ? "Task" : worker.title.str, 58)).font(.system(size: 12.5)).foregroundStyle(.white).lineLimit(1)
+            }.buttonStyle(.plain)
+            Spacer()
+            Text(ago(worker.updated.num)).font(.system(size: 11)).foregroundStyle(.white.opacity(0.4))
+            Pill(status: worker.status.str)
+            if worker.status.str == "working" {
+                Button { Task { await store.stopWorker(worker.id) } } label: { Image(systemName: "stop.fill").font(.system(size: 9)) }
+                    .buttonStyle(.plain).foregroundStyle(.white.opacity(0.6)).help("Stop this task").accessibilityLabel("Stop this task")
+            }
+        }
+    }
+}
+
+/// A task's steps as a row of marks, with the one running now named beside them, so how
+/// far along it is and whether anything failed shows without opening it.
+private struct StepTrail: View {
+    let steps: [JSON]
+    private static let shown = 24
+
+    var body: some View {
+        if !steps.isEmpty {
+            let recent = steps.suffix(Self.shown)
+            let failed = steps.filter { $0.status.str == "failed" }.count
+            HStack(spacing: 8) {
+                HStack(spacing: 2) {
+                    ForEach(recent) { step in
+                        RoundedRectangle(cornerRadius: 1.5, style: .continuous).fill(tone(step.status.str)).frame(width: 5, height: 5)
+                    }
+                }
+                .accessibilityElement()
+                .accessibilityLabel(failed > 0 ? "\(plural(steps.count, "step")), \(failed) failed" : plural(steps.count, "step"))
+                if let now = steps.last(where: { $0.status.str == "running" }) {
+                    let input = now.detail.arguments
+                    let what = input.command.optStr ?? input.path.optStr ?? input.url.optStr ?? input.query.optStr ?? ""
+                    Text(clip(oneLine([now.name.str, what].filter { !$0.isEmpty }.joined(separator: " · ")), 56))
+                        .font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+                } else {
+                    Text(plural(steps.count, "step")).font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.5))
+                }
+            }
+        }
+    }
+
+    private func tone(_ status: String) -> Color {
+        switch status {
+        case "failed": return MC.danger
+        case "running": return .white.opacity(0.9)
+        default: return .white.opacity(0.32)
+        }
     }
 }
 
@@ -892,8 +984,8 @@ private struct Conversation: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 11) {
-                ForEach(model.messages.suffix(24)) { message in
-                    row(message).transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 10)), removal: .opacity))
+                ForEach(BarLine.lines(model.messages.suffix(24))) { line in
+                    view(line).transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 10)), removal: .opacity))
                 }
                 LiveText(threadID: threadID)
             }
@@ -906,9 +998,17 @@ private struct Conversation: View {
         .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.07), .init(color: .black, location: 0.96), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
     }
 
+    @ViewBuilder private func view(_ line: BarLine) -> some View {
+        switch line.kind {
+        case .divider(let ts): TimeDivider(ts: ts)
+        case .tools(let steps): ToolRun(steps: steps)
+        case .message(let message): row(message)
+        }
+    }
+
     @ViewBuilder private func row(_ message: Message) -> some View {
-        if message.kind == "tool" {
-            Label(clip(message.text, 90), systemImage: "gearshape").font(.system(size: 11)).foregroundStyle(.white.opacity(0.42)).lineLimit(1)
+        if let approval = message.meta.approval.optStr {
+            ApprovalCard(id: approval, fallback: message.text)
         } else if message.sender == "user" {
             HStack {
                 Spacer(minLength: 60)
@@ -919,6 +1019,64 @@ private struct Conversation: View {
         } else {
             MarkdownView(text: message.text).foregroundStyle(.white)
         }
+    }
+}
+
+/// What the conversation draws, in order: messages, the tools used between them folded
+/// into one line, and the time wherever a long gap starts a new sitting.
+private struct BarLine: Identifiable {
+    enum Kind { case message(Message), tools([Message]), divider(Double) }
+    let id: String
+    let kind: Kind
+
+    static func lines(_ messages: ArraySlice<Message>) -> [BarLine] {
+        var out: [BarLine] = [], previous: Double?
+        for message in messages {
+            if let previous, TimeDivider.separates(previous, message.ts) {
+                out.append(BarLine(id: "d\(message.id)", kind: .divider(message.ts)))
+            }
+            previous = message.ts
+            if message.kind == "tool" {
+                if case .tools(let steps)? = out.last?.kind {
+                    out[out.count - 1] = BarLine(id: out[out.count - 1].id, kind: .tools(steps + [message]))
+                } else {
+                    out.append(BarLine(id: "t\(message.id)", kind: .tools([message])))
+                }
+            } else {
+                out.append(BarLine(id: "m\(message.id)", kind: .message(message)))
+            }
+        }
+        return out
+    }
+}
+
+/// The tools a reply used, as one quiet line that opens into the list.
+private struct ToolRun: View {
+    let steps: [Message]
+    @State private var open = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Button { if steps.count > 1 { open.toggle() } } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "gearshape").accessibilityHidden(true)
+                    Text(steps.count == 1 ? clip(steps[0].text, 90) : "Used \(steps.count) tools · \(clip(steps[steps.count - 1].text, 60))").lineLimit(1)
+                    if steps.count > 1 {
+                        Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold)).rotationEffect(.degrees(open ? 90 : 0)).accessibilityHidden(true)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(steps.count == 1 ? steps[0].text : "Used \(steps.count) tools")
+            if open {
+                ForEach(steps) { step in
+                    Text(clip(step.text, 96)).lineLimit(1).padding(.leading, 18)
+                }
+            }
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(.secondary)
     }
 }
 
