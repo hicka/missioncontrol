@@ -62,7 +62,7 @@ struct SettingsGeneralPane: View {
                     Text("Max (slowest)").tag("max")
                 }
                 if form.ready && (isLocal || preset.base_url.str.isEmpty) {
-                    TextField("Base URL", text: $form.value.baseURL, prompt: Text(preset.base_url.optStr ?? "https://host/v1"))
+                    TextField("Base URL", text: $form.value.baseURL, prompt: Text(preset.base_url.str.isEmpty ? "https://host/v1" : preset.base_url.str))
                         .autocorrectionDisabled()
                 }
                 if needsKey {
