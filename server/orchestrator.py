@@ -2112,10 +2112,25 @@ class Orchestrator:
                 except (TypeError, ValueError):
                     max_checks = watch_mod.DEFAULT_CHECKS
                 max_checks = max(1, min(max_checks, watch_mod.MAX_CHECKS))
+                session_id = getattr(ctx, "activity_thread", None) and ctx.id
+                # One poll now, before anything waits on it. Three watches once polled a build
+                # address that answered 404 from the first try, and their task heard nothing
+                # for an hour. A poll that already shows the answer needs no watch at all.
+                try:
+                    keys = await asyncio.to_thread(watch_mod._holds_keys, {"session": session_id})
+                    first = harness.redact(await watch_mod._run_poll(poll, agent_cwd, keys))
+                except Exception as exc:
+                    return (f"not watching: the first poll failed ({exc.__class__.__name__}: {str(exc)[:300]}), "
+                            "so a watch on it would never see a result. Fix the address or command, or check "
+                            "another way that works, such as the service's own CLI.")
+                settled = watch_mod._by_pattern(first, done_when or None, fail_when or None)
+                if settled:
+                    return (f"not watching: the first poll already shows it "
+                            f"{'finished' if settled == 'done' else 'FAILED'}.\n\n{first[:2000]}")
                 wid = await asyncio.to_thread(
                     db.add_watch, aid, wname, poll, done_when or None,
                     fail_when or None, interval, max_checks, aid, agent_cwd,
-                    ctx.mission, resolve_when or None, getattr(ctx, "activity_thread", None) and ctx.id)
+                    ctx.mission, resolve_when or None, session_id)
                 await self._emit({"type": "watch_updated"})
                 return (f"watching '{wname}' [{wid}], polling every {interval}s up to "
                         f"{max_checks} times. No approval needed; it stops itself when it "

@@ -1133,6 +1133,11 @@ def test_a_watch_result_goes_back_to_the_session_that_armed_it(isolated, monkeyp
 
 def test_an_armed_watch_means_waiting_not_finished(isolated, monkeypatch):
     model = Model(monkeypatch)
+    import watch
+
+    async def not_yet(*args, **kwargs):
+        return "HTTP 200\nstatus: deploying"
+    monkeypatch.setattr(watch, "_run_poll", not_yet)
 
     async def main():
         o = make(monkeypatch)

@@ -222,6 +222,17 @@ async def _resolve(orch, w: dict, status: str, out: str, errors: int = 0):
     await _notify(orch, {**w, "status": status, "last_out": out, "errors": errors})
 
 
+def _task_finished(w: dict) -> bool:
+    """The Worker that started the watch has ended, or gone idle with its task closed."""
+    if not w.get("session"):
+        return False
+    row = store.session_get(w["session"])
+    if not row or row["status"] == "ended":
+        return True
+    mission = runtime_store.mission_get(row["mission"]) if row.get("mission") else None
+    return row["status"] in ("idle", "failed") and (mission is None or mission["status"] in ("completed", "cancelled", "failed"))
+
+
 async def _notify(orch, w: dict):
     if w["agent"] not in orch.agents:
         await asyncio.to_thread(db.finish_watch_notice, w["id"], True)
@@ -229,7 +240,15 @@ async def _notify(orch, w: dict):
     if not await asyncio.to_thread(db.claim_watch_notice, w["id"]):
         return
     status, out = w["status"], w.get("last_out") or ""
-    if status == "expired" and (w.get("errors") or 0) >= BROKEN_AFTER:
+    broken = status == "expired" and (w.get("errors") or 0) >= BROKEN_AFTER
+    if broken and await asyncio.to_thread(_task_finished, w):
+        # A broken check says nothing about what it watched, and its task is over, so
+        # there is nothing to wake it for: it would only be told to carry on with work
+        # that is done.
+        logger.info("watch %s (%s) stopped on poll errors after its task finished; not waking it", w["id"], w["name"])
+        await asyncio.to_thread(db.finish_watch_notice, w["id"], True)
+        return
+    if broken:
         text = (f"watch '{w['name']}' stopped: its poll failed the same way {w['errors']} times in a "
                 f"row, so the check itself is not working (a wrong address, a missing login, or a "
                 f"command that cannot run here). It says nothing about the thing you were "
