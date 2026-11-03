@@ -66,6 +66,13 @@ WORKER_TOOLS = [
                 "question": {"type": "string", "description": "blocked: one direct question for the owner"},
                 "files": {"type": "array", "items": {"type": "string"},
                           "description": "absolute paths of files to hand over: a screenshot, a report, a csv"},
+                "checks": {"type": "array", "description": "the finish line: what the person asked for, as a few "
+                           "checks in their words, each done or not, with how you confirmed it (the command and "
+                           "what it showed, or the id). A check left out stays as it was.",
+                           "items": {"type": "object", "properties": {
+                               "check": {"type": "string"}, "done": {"type": "boolean"},
+                               "how": {"type": "string", "description": "how you confirmed it is done"}},
+                               "required": ["check", "done"]}},
             },
             "required": ["status", "summary"],
         },
@@ -144,6 +151,43 @@ STANDING_NOTE = (
     "deploy, merge or message is held for their approval, and so is anything touching their keys. Report what you found "
     "rather than acting on it unless the job's own instructions name that exact step and they have approved it."
 )
+FINISH_LINE_NOTE = (
+    "\n- A person asked for this, so it has a finish line: what they asked for, as a few checks in their words. Give "
+    "it in checks in your first report and keep it current as you go. Ready needs every check done, each with how you "
+    "confirmed it. If one cannot be done, report blocked or failed with what stands in the way, not ready."
+)
+
+
+def finish_line_applies(row: dict) -> bool:
+    """Work a person asked for. A direct line and a scheduled run end with their answer,
+    and nobody is waiting on work done ahead of time."""
+    meta = row.get("meta") or {}
+    return ((row.get("strength") == "explicit" or bool(meta.get("was_asked"))) and not row.get("direct")
+            and not row.get("speculative") and not meta.get("one_shot"))
+
+
+def merge_checks(stored: list, given: list, evidence: list) -> list[dict]:
+    """The finish line after a report: as it stood, updated by what this report says, and
+    anything new added. A check left out keeps its place, so none goes by saying nothing.
+    A way of confirming that names an id this turn never saw is marked unverified."""
+    def key(text):
+        return " ".join(text.casefold().split())
+    out = [dict(c) for c in stored]
+    for item in given:
+        text = " ".join(str(item.get("check") or "").split())[:300]
+        if not text:
+            continue
+        how = " ".join(str(item.get("how") or "").split())[:500]
+        entry = {"check": text, "done": bool(item.get("done")), "how": how,
+                 "unverified": bool(how and unevidenced_ids(how, evidence))}
+        same = next((c for c in out if key(c["check"]) == key(text)), None)
+        if same:
+            same.update(entry)
+        else:
+            out.append(entry)
+    return out[:12]
+
+
 SPECULATIVE_NOTE = (
     "\nACTING AHEAD: You are doing this in the background on the chance it is useful, and nobody is waiting for "
     "it. Report ready only with something confirmed and worth a person's attention, such as a reproduced issue with "
@@ -236,6 +280,8 @@ class Worker(sess.Session):
             prompt += STANDING_NOTE
         if row["speculative"]:
             prompt += SPECULATIVE_NOTE
+        if finish_line_applies(row):
+            prompt += FINISH_LINE_NOTE
         return prompt
 
     def tool_defs(self):
@@ -377,7 +423,23 @@ class Worker(sess.Session):
             return f"error: no such file: {', '.join(missing)}"
         if status == "blocked" and not (args.get("question") or "").strip():
             return "error: blocked needs the question a person has to answer"
-        stopped = await self.deliver_report(status, summary, (args.get("question") or "").strip(), files)
+        row = await asyncio.to_thread(store.session_get, self.id) or self.row
+        checks = None
+        if finish_line_applies(row):
+            given = [c for c in (args.get("checks") or []) if isinstance(c, dict)]
+            checks = merge_checks((row.get("meta") or {}).get("finish_line") or [], given, self.evidence)
+            if status == "ready":
+                # Saying it is finished is not the same as it being finished: a task closed
+                # as done with none of the ten screenshots it was asked for.
+                if not checks:
+                    return ("error: not reported. A person asked for this, so ready needs the finish line: what they "
+                            "asked for, as checks in their words, each done with how you confirmed it. Nothing was sent.")
+                still = [c["check"] for c in checks if not (c["done"] and c["how"])]
+                if still:
+                    return ("error: not reported. Ready needs every check done and how you confirmed it. Still open: "
+                            f"{'; '.join(still)}. Finish it, or report waiting, blocked or failed with what stands in "
+                            "the way. Nothing was sent.")
+        stopped = await self.deliver_report(status, summary, (args.get("question") or "").strip(), files, checks=checks)
         if status in TERMINAL_REPORTS:
             self.stop_after_tools = True
         self.said_waiting = status == "waiting"
@@ -518,6 +580,8 @@ class Worker(sess.Session):
             await self.deliver_report("dropped", text)
             return
         marked = f"{NOT_CONFIRMED}\n\n{text}"
+        if await self._stopped_short(row, marked):
+            return
         reports = await asyncio.to_thread(store.reports_of, self.id, 1)
         # It has done nothing since it said it was waiting, so that is still where this stands.
         if reports and reports[0]["status"] == "waiting" and not self.acted:
@@ -568,6 +632,9 @@ class Worker(sess.Session):
         needed nothing, so it goes back to exactly where it stood: still following its
         thread, still blocked if it was, with the context the next event will need."""
         status = last["status"] if last else None
+        # Going quiet after a progress report closed a task with most of it undone.
+        if status in (None, "progress") and await self._stopped_short(row, last["summary"] if last else ""):
+            return
         # A question the owner has since answered is not still open.
         answered = status == "blocked" and not row.get("question")
         session_status = "waiting" if waiting else "idle" if answered or status not in ("blocked", "failed") else status
@@ -580,6 +647,19 @@ class Worker(sess.Session):
             await asyncio.to_thread(runtime_store.mission_set, self.mission, state,
                                     None if last else "Nothing needed doing.")
             await self.orch._emit({"type": "mission_updated"})
+
+    async def _stopped_short(self, row: dict, summary: str) -> bool:
+        """It stopped with part of what it was asked for still open. That is a question for
+        the owner, not a finished task: filed as done, nobody would have heard what was left."""
+        row = await asyncio.to_thread(store.session_get, self.id) or row
+        if not finish_line_applies(row):
+            return False
+        still = [c["check"] for c in (row.get("meta") or {}).get("finish_line") or [] if not (c.get("done") and c.get("how"))]
+        if not still:
+            return False
+        await self.deliver_report("blocked", summary, f"It stopped with this still not done: {'; '.join(still)}. "
+                                                      "Should it carry on?")
+        return True
 
     async def _stand_down(self):
         await asyncio.to_thread(store.session_stand_down, self.id)
@@ -630,9 +710,10 @@ class Worker(sess.Session):
         if note:
             await self.orch.router.notify_owner(note)
 
-    async def deliver_report(self, status, summary, question="", files=None, wake=False) -> list[str]:
+    async def deliver_report(self, status, summary, question="", files=None, wake=False, checks=None) -> list[str]:
         """Every kind of ending goes through here: this is the Worker's only way out.
-        Says which watches it stopped, when the report finished the task."""
+        Says which watches it stopped, when the report finished the task. checks is the
+        finish line as this report leaves it; without it the one the task already has stands."""
         summary = (summary or "").strip()
         stale = unevidenced_ids(summary, self.evidence)
         if stale:
@@ -659,8 +740,9 @@ class Worker(sess.Session):
         # Before the report exists, so nothing can see the task as done with its watches
         # still running. A handback goes on with someone else, so what it watches may still matter.
         stopped = await self._end_watches(f"Its task reported {status}.") if status in ("ready", "dropped", "failed") else []
+        line = checks if checks is not None else meta.get("finish_line") or []
         report = await asyncio.to_thread(store.report_deliver, self.id, self.mission, status, summary, question, files,
-                                         reader, kind, kind == "report", row["strength"])
+                                         reader, kind, kind == "report", row["strength"], line)
         self.reported = status
         if status == "waiting":
             self.acted = False
@@ -674,6 +756,9 @@ class Worker(sess.Session):
                 fields["meta"] = meta
         if reader and kind == "report" and meta.get("owes_word"):
             meta = {**meta, "owes_word": False}
+            fields["meta"] = meta
+        if checks is not None and checks != meta.get("finish_line"):
+            meta = {**meta, "finish_line": checks}
             fields["meta"] = meta
         if status in ("ready", "dropped"):
             fields["status"] = "ended" if status == "dropped" or one_shot else "idle"

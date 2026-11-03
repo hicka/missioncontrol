@@ -81,8 +81,12 @@ def _ensure():
         c.execute("ALTER TABLE threads ADD COLUMN stopped REAL")
     if "gave_up" not in {row[1] for row in c.execute("PRAGMA table_info(outbox)")}:
         c.execute("ALTER TABLE outbox ADD COLUMN gave_up REAL")
-    if "strength" not in {row[1] for row in c.execute("PRAGMA table_info(reports)")}:
+    report_columns = {row[1] for row in c.execute("PRAGMA table_info(reports)")}
+    if "strength" not in report_columns:
         c.execute("ALTER TABLE reports ADD COLUMN strength TEXT NOT NULL DEFAULT ''")
+    # The task's finish line as this report left it: each check, done or not, and how.
+    if "checks" not in report_columns:
+        c.execute("ALTER TABLE reports ADD COLUMN checks TEXT NOT NULL DEFAULT '[]'")
     c.execute("CREATE INDEX IF NOT EXISTS trigger_thread ON triggers(thread, ts)")
     c.execute("CREATE INDEX IF NOT EXISTS trigger_ts ON triggers(ts)")
     c.execute("CREATE INDEX IF NOT EXISTS sub_session ON subscriptions(session)")
@@ -104,9 +108,9 @@ def _rows(cursor) -> list[dict]:
     keys = [col[0] for col in cursor.description]
     out = [dict(zip(keys, row)) for row in cursor.fetchall()]
     for row in out:
-        for key in ("meta", "address", "files"):
+        for key in ("meta", "address", "files", "checks"):
             if key in row and isinstance(row[key], str):
-                row[key] = json.loads(row[key] or ("[]" if key == "files" else "{}"))
+                row[key] = json.loads(row[key] or ("[]" if key in ("files", "checks") else "{}"))
     return out
 
 
@@ -678,17 +682,17 @@ def report_add(session: str, mission: str | None, status: str, summary: str,
 
 def report_deliver(session: str, mission: str | None, status: str, summary: str, question: str = "",
                    files: list | None = None, to: str = "", kind: str = "report", wakes: bool = True,
-                   strength: str = "") -> dict:
+                   strength: str = "", checks: list | None = None) -> dict:
     """A report and its place in the reader's inbox, in one commit. They used to be two
     steps with a slow one between them, and a shutdown landing there lost the report:
     the Worker read as finished and nobody was ever told."""
     rid, now = _new("rp"), time.time()
     with db._lock:
         c = _ensure()
-        c.execute("INSERT INTO reports (id, ts, session, mission, status, summary, question, files, strength) "
-                  "VALUES (?,?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO reports (id, ts, session, mission, status, summary, question, files, strength, checks) "
+                  "VALUES (?,?,?,?,?,?,?,?,?,?)",
                   (rid, now, session, mission, status, summary, question,
-                   json.dumps(files or [], ensure_ascii=False), strength))
+                   json.dumps(files or [], ensure_ascii=False), strength, json.dumps(checks or [], ensure_ascii=False)))
         if to:
             c.execute("INSERT INTO session_inbox (session, ts, kind, ref, text, meta, wakes, priority) "
                       "VALUES (?,?,?,?,?,?,?,?)", (to, now, kind, rid, "", "{}", int(wakes), 0))
