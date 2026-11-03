@@ -5,6 +5,7 @@ fixed, so each failing again means that gap is back. The model is scripted; ever
 else is real.
 """
 import asyncio
+import datetime
 import inspect
 import json
 import os
@@ -328,6 +329,28 @@ def test_a_question_stays_on_the_board_and_in_the_inbox_until_answered(isolated,
         await until(lambda: store.reports_of(row["id"])[0]["status"] == "ready")
         assert store.session_get(row["id"])["question"] == ""
         assert not [i for i in await app._inbox() if i["kind"] == "question"]
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_the_board_says_when_a_task_last_reported_and_what_its_watch_is_hitting(isolated, monkeypatch):
+    # The Router answered "the build is queued" from a report eighteen minutes old, with
+    # the build long finished and the task's watch failing every poll. It could not have
+    # known either: the board said only "waiting".
+    model = Hold(monkeypatch)
+    model.worker = [call("report", status="waiting", summary="Both builds are queued."), say("NO_REPLY")]
+
+    async def main():
+        o = make(monkeypatch)
+        row = await o.workers.spawn(second(o), "Ship the hotfix", "", [])
+        await until(lambda: store.session_get(row["id"])["status"] == "waiting")
+        wid = db.add_watch(second(o), "hotfix builds", "https://builds.example/api/1", "finished", None,
+                           180, 40, second(o), session=row["id"])
+        db.finish_watch_poll(wid, "active", "(poll error: RuntimeError: HTTP 404)")
+        written = datetime.datetime.fromtimestamp(store.reports_of(row["id"], 1)[0]["ts"]).strftime("%a %H:%M")
+        board = o.router.task_board()
+        assert f"Ship the hotfix (last report {written})" in board
+        assert "waiting on watch 'hotfix builds', whose last poll failed: (poll error: RuntimeError: HTTP 404)" in board
         await wind_down(o)
     asyncio.run(main())
 
