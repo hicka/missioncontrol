@@ -92,6 +92,7 @@ PROTECTED = (
     "server/selfupdate.py",    # what every installed copy will run next
     "native/macos/Updates.swift",  # and how the signed app takes it
     "scripts/build_macos.py",  # what goes into a signed release
+    "scripts/setup_release.sh",  # where the signing keys are sent
     "packaging/",              # entitlements and the frozen runtime's contents
 )
 PROTECTED_PATTERNS = (

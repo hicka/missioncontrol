@@ -118,6 +118,12 @@ the repository:
 | Variable | `NOTARY_KEY_ID`, `NOTARY_ISSUER` | The API key's ids |
 | Variable | `SPARKLE_PUBLIC_KEY` | The public half, built into the app |
 
+`scripts/setup_release.sh --notary-key AuthKey_<id>.p8 --issuer <issuer id>` sets all of
+them from the Mac that holds the certificate. It creates the environment open to `v*` tags
+only, exports just the Developer ID identity (macOS asks first), checks the notary key with
+`notarytool`, and makes Sparkle's key in the login keychain. Secrets go straight to GitHub
+and nothing is written to the checkout. Run it again at any time: what is already set stays.
+
 Losing the private key strands every installed copy on its last version, so back it up. Anyone
 holding it and the certificate can ship code to every install.
 
