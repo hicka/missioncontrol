@@ -108,6 +108,54 @@ def test_tick_expires_after_max_checks():
     assert "did not resolve" in orch.fired[0][2]
 
 
+def _polls(monkeypatch, *outcomes):
+    """The poll's answers in turn: text, or an exception it raises, as a 404 would."""
+    import watch
+    answers = list(outcomes)
+
+    async def poll(*args, **kwargs):
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    monkeypatch.setattr(watch, "_run_poll", poll)
+
+
+def _tick_times(orch, count, start=1_000_000.0):
+    import watch
+    for n in range(count):
+        asyncio.run(watch._tick(orch, _noop, start + n * 1000))
+
+
+def test_a_poll_failing_the_same_way_stops_the_watch_and_says_why(monkeypatch):
+    import db
+    import watch
+    aid = "atlas"
+    wid = db.add_watch(aid, "build", "https://builds.example/api/1", "finished", None, 20, 40, aid)
+    _polls(monkeypatch, *[RuntimeError("HTTP 404")] * watch.BROKEN_AFTER)
+    orch = _FakeOrch(aid)
+    _tick_times(orch, watch.BROKEN_AFTER)
+    w = db.get_watch(wid)
+    assert w["status"] == "expired" and w["checks"] == watch.BROKEN_AFTER
+    assert len(orch.fired) == 1
+    told = orch.fired[0][2]
+    assert "check itself is not working" in told and "HTTP 404" in told and "another way" in told
+
+
+def test_a_good_poll_or_a_different_error_starts_the_count_again(monkeypatch):
+    import db
+    import watch
+    aid = "atlas"
+    wid = db.add_watch(aid, "build", "https://builds.example/api/1", "finished", None, 20, 40, aid)
+    _polls(monkeypatch, RuntimeError("HTTP 404"), RuntimeError("HTTP 404"), "HTTP 200\n{\"status\":\"in progress\"}",
+           RuntimeError("HTTP 404"), RuntimeError("HTTP 502"), RuntimeError("HTTP 404"))
+    orch = _FakeOrch(aid)
+    _tick_times(orch, 6)
+    w = db.get_watch(wid)
+    assert w["status"] == "active" and w["checks"] == 6 and w["errors"] == 1
+    assert not orch.fired
+
+
 def test_tick_respects_the_interval():
     import db
     import watch

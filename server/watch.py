@@ -39,6 +39,10 @@ DEFAULT_INTERVAL = 30
 DEFAULT_CHECKS = 40
 MAX_CHECKS = 240        # hard ceiling so a watch can never poll forever
 POLL_TIMEOUT = 30       # per-poll timeout (seconds)
+# The same poll error this many times in a row means the check itself is broken, such as
+# a wrong address or a missing login, and waiting out every check would only keep the
+# Worker waiting on nothing.
+BROKEN_AFTER = 3
 
 # A watch polls the SAME command repeatedly on a timer, so it must be read-only.
 # Refuse anything that looks like it changes state; the agent can still use the
@@ -212,10 +216,10 @@ async def _outcome(w: dict, out: str):
     return resolved
 
 
-async def _resolve(orch, w: dict, status: str, out: str):
-    if not await asyncio.to_thread(db.finish_watch_poll, w["id"], status, out):
+async def _resolve(orch, w: dict, status: str, out: str, errors: int = 0):
+    if not await asyncio.to_thread(db.finish_watch_poll, w["id"], status, out, errors):
         return
-    await _notify(orch, {**w, "status": status, "last_out": out})
+    await _notify(orch, {**w, "status": status, "last_out": out, "errors": errors})
 
 
 async def _notify(orch, w: dict):
@@ -225,12 +229,20 @@ async def _notify(orch, w: dict):
     if not await asyncio.to_thread(db.claim_watch_notice, w["id"]):
         return
     status, out = w["status"], w.get("last_out") or ""
-    verb = {"done": "resolved: the thing you were watching succeeded / completed",
-            "failed": "resolved as FAILED",
-            "expired": f"did not resolve after {w['max_checks']} checks"}[status]
-    text = (f"watch '{w['name']}' {verb}.\n\nLatest poll output:\n{out[:3000]}\n\n"
-            "Take any obvious follow-up, then report the outcome. This watch has stopped; do "
-            "not recreate it just to re-check. If nothing needs saying, reply exactly NO_REPLY.")
+    if status == "expired" and (w.get("errors") or 0) >= BROKEN_AFTER:
+        text = (f"watch '{w['name']}' stopped: its poll failed the same way {w['errors']} times in a "
+                f"row, so the check itself is not working (a wrong address, a missing login, or a "
+                f"command that cannot run here). It says nothing about the thing you were "
+                f"watching.\n\nThe error:\n{out[:3000]}\n\nFind out now, another way that works "
+                "(the service's own CLI, say), whether it has finished, then carry on with the "
+                "task. Do not start the same watch again.")
+    else:
+        verb = {"done": "resolved: the thing you were watching succeeded / completed",
+                "failed": "resolved as FAILED",
+                "expired": f"did not resolve after {w['max_checks']} checks"}[status]
+        text = (f"watch '{w['name']}' {verb}.\n\nLatest poll output:\n{out[:3000]}\n\n"
+                "Take any obvious follow-up, then report the outcome. This watch has stopped; do "
+                "not recreate it just to re-check. If nothing needs saying, reply exactly NO_REPLY.")
     logger.info("watch %s (%s) -> %s", w["id"], w["name"], status)
     try:
         await orch.external_event(w["agent"], "watch", text, mission=w.get("mission"),
@@ -273,6 +285,7 @@ async def _tick(orch, broadcast, now: float):
                 return False
             checks = w["checks"] + 1
             await announce(w["id"], "polling")
+            errors = 0
             try:
                 keys = await asyncio.to_thread(_holds_keys, w)
                 # What a poll prints goes to a model, so it is masked like any tool's output.
@@ -282,11 +295,14 @@ async def _tick(orch, broadcast, now: float):
                 # Failed commands / HTTP responses are never success signals.
                 out = harness.redact(f"(poll error: {exc.__class__.__name__}: {str(exc)[:300]})")
                 result = None
+                # A different error starts the count again: only the same one, again and
+                # again, says the poll is broken rather than the service having a bad minute.
+                errors = (w.get("errors") or 0) + 1 if out == (w.get("last_out") or "") else 1
             try:
-                if result or checks >= w["max_checks"]:
-                    await _resolve(orch, w, result or "expired", out)
+                if result or checks >= w["max_checks"] or errors >= BROKEN_AFTER:
+                    await _resolve(orch, w, result or "expired", out, errors)
                 else:
-                    await asyncio.to_thread(db.finish_watch_poll, w["id"], "active", out)
+                    await asyncio.to_thread(db.finish_watch_poll, w["id"], "active", out, errors)
             finally:
                 await announce(w["id"])
             return True
