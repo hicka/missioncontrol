@@ -159,8 +159,8 @@ These work in the app and on messaging channels. Most answer without a model cal
 ## Other ways to run it
 
 **Desktop apps.** The macOS app is fully native, with an always-on floating bar for
-talking to the agent and seeing what it is doing (`⌥Space`), and it keeps itself up to date
-from signed releases. Its data stays in your user profile. Build it with
+talking to the agent and seeing what it is doing (`⌥Space`). Once signed releases are
+published it will keep itself up to date from them. Its data stays in your user profile. Build it with
 `./venv/bin/python scripts/build_macos.py`, or see the
 [native macOS guide](docs/native-macos.md). macOS and Windows builds also come out of
 the [build workflow](.github/workflows/build.yml).
