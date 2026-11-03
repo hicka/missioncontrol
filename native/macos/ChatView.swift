@@ -471,7 +471,11 @@ private struct MessageRow: View {
                     if first { SenderHead(sender: message.sender, ts: message.ts) }
                     VStack(alignment: .leading, spacing: 6) {
                         AttachmentList(meta: message.meta)
-                        MarkdownView(text: words)
+                        if let approval = message.meta.approval.optStr {
+                            ApprovalCard(id: approval, fallback: words).frame(maxWidth: 620, alignment: .leading)
+                        } else {
+                            MarkdownView(text: words)
+                        }
                     }
                     .modifier(HitMark(on: hit))
                     .padding(.leading, 34)
@@ -691,7 +695,7 @@ private struct JobCard: View {
                 Text(verbatim: meta.task.str).font(.system(size: 12.5)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 if !monitor.isEmpty {
                     Text("Before every run it executes this check in your shell:").font(.system(size: 12)).foregroundStyle(.secondary)
-                    CodeBlock(text: monitor)
+                    WholeCode(text: monitor)
                 }
                 if status == "pending" {
                     HStack(spacing: 8) {
@@ -716,7 +720,8 @@ private struct JobCard: View {
     }
 }
 
-private struct CodeBlock: View {
+/// Code that is approved as shown, so all of it is on screen, wrapped, never folded.
+private struct WholeCode: View {
     let text: String
     var body: some View {
         Text(verbatim: text)
