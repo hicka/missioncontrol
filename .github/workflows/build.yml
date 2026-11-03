@@ -1,14 +1,22 @@
 name: Build desktop apps
 
-# A release is a tag someone pushed on purpose. Nothing here runs on a plain push, because
-# self-repair pushes to master on its own and installed apps take what is released here.
+# A release is a tag someone pushed on purpose, because self-repair pushes to master on its
+# own and installed apps take what is released here. A push to master only refreshes the
+# "Latest build" pre-release, which nothing installed ever updates from.
 on:
   push:
     tags: ["v*"]
+    branches: [master]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# Pushes to master come in runs, and only the newest build is worth finishing. A release
+# never cancels another.
+concurrency:
+  group: ${{ startsWith(github.ref, 'refs/tags/') && github.ref || 'latest-build' }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   FEED_URL: https://github.com/${{ github.repository }}/releases/latest/download/appcast.xml
@@ -39,7 +47,7 @@ jobs:
         run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --generate-notes --verify-tag
 
   macos:
-    # On a tag this waits for the draft; run by hand it builds an unsigned app to look at.
+    # On a tag this waits for the draft and signs. On master, or run by hand, it builds an unsigned app.
     needs: [test, draft]
     if: ${{ !cancelled() && needs.test.result == 'success' && (needs.draft.result == 'success' || needs.draft.result == 'skipped') }}
     runs-on: macos-latest
@@ -187,6 +195,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$env:GITHUB_REF_NAME" MissionControl-Windows.zip MissionControl-Windows-Setup.exe --clobber
+
+  # The newest build, always one download away. A pre-release is never "latest", and the
+  # update feed is read from the latest release, so no installed app moves to one of these.
+  latest:
+    if: ${{ !cancelled() && github.ref == 'refs/heads/master' && needs.macos.result == 'success' }}
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Refresh the Latest build pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir apps
+          files=$(find apps -type f \( -name '*.zip' -o -name '*.exe' \) | sort)
+          notes="Built from [\`${GITHUB_SHA:0:7}\`](https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA) on master, $(date -u '+%Y-%m-%d %H:%M UTC').
+
+          The newest build, replaced on every push to master. It is not signed yet: the first time you open it, macOS asks you to allow it under System Settings › Privacy & Security › Open Anyway. It does not update itself; versioned releases do."
+          gh release delete latest-build --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes 2>/dev/null || true
+          gh release create latest-build --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title "Latest build" --notes "$notes" $files
 
   publish:
     if: startsWith(github.ref, 'refs/tags/')
