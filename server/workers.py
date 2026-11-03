@@ -377,10 +377,14 @@ class Worker(sess.Session):
             return f"error: no such file: {', '.join(missing)}"
         if status == "blocked" and not (args.get("question") or "").strip():
             return "error: blocked needs the question a person has to answer"
-        await self.deliver_report(status, summary, (args.get("question") or "").strip(), files)
+        stopped = await self.deliver_report(status, summary, (args.get("question") or "").strip(), files)
         if status in TERMINAL_REPORTS:
             self.stop_after_tools = True
         self.said_waiting = status == "waiting"
+        if stopped:
+            return (f"reported {status}, and stopped the watches this task still had running: "
+                    f"{', '.join(repr(name) for name in stopped)}. If one was still needed, the task is not "
+                    "finished: start it again and report waiting.")
         return await self._what_will_wake_it() if self.said_waiting else f"reported {status}"
 
     async def _subscribe_tool(self, args):
@@ -626,8 +630,9 @@ class Worker(sess.Session):
         if note:
             await self.orch.router.notify_owner(note)
 
-    async def deliver_report(self, status, summary, question="", files=None, wake=False):
-        """Every kind of ending goes through here: this is the Worker's only way out."""
+    async def deliver_report(self, status, summary, question="", files=None, wake=False) -> list[str]:
+        """Every kind of ending goes through here: this is the Worker's only way out.
+        Says which watches it stopped, when the report finished the task."""
         summary = (summary or "").strip()
         stale = unevidenced_ids(summary, self.evidence)
         if stale:
@@ -651,6 +656,9 @@ class Worker(sess.Session):
             reader = "router"
         elif status != "dropped":
             reader, kind = "router", "report_fyi"
+        # Before the report exists, so nothing can see the task as done with its watches
+        # still running. A handback goes on with someone else, so what it watches may still matter.
+        stopped = await self._end_watches(f"Its task reported {status}.") if status in ("ready", "dropped", "failed") else []
         report = await asyncio.to_thread(store.report_deliver, self.id, self.mission, status, summary, question, files,
                                          reader, kind, kind == "report", row["strength"])
         self.reported = status
@@ -700,6 +708,19 @@ class Worker(sess.Session):
                                     sender=self.profile, files=files)
         if reader and kind == "report":
             self.orch.router.wake()
+        return stopped
+
+    async def _end_watches(self, reason: str) -> list[str]:
+        """A finished task's watches have nothing left to wake. Left running, three polled
+        a build address for an hour after the release they watched had shipped, and each
+        would have woken the finished task to carry on with it."""
+        stopped = []
+        for watch in await asyncio.to_thread(db.list_watches, "active"):
+            if watch.get("session") == self.id and await asyncio.to_thread(db.finish_watch_poll, watch["id"], "cancelled", reason):
+                stopped.append(watch["name"])
+        if stopped:
+            await self.orch._emit({"type": "watch_updated"})
+        return stopped
 
 
 async def recall_tool(args: dict, viewer: dict | None = None) -> str:

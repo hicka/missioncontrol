@@ -354,6 +354,53 @@ def test_the_board_says_when_a_task_last_reported_and_what_its_watch_is_hitting(
     asyncio.run(main())
 
 
+def _building(monkeypatch):
+    import watch
+
+    async def still_building(*args, **kwargs):
+        return 'HTTP 200\n{"status":"in progress"}'
+    monkeypatch.setattr(watch, "_run_poll", still_building)
+
+
+def test_a_task_that_reports_ready_stops_its_watches_and_hears_which(isolated, monkeypatch):
+    # A hotfix reported ready with three build watches still polling, each of which would
+    # have woken it, an hour later, to carry on with the work it had finished.
+    _building(monkeypatch)
+    model = Hold(monkeypatch)
+    model.worker = [call("watch", action="start", name="ios build", poll="https://builds.example/api/1",
+                         done_when="finished"),
+                    call("report", status="ready", summary="Both releases are done."), say("NO_REPLY")]
+
+    async def main():
+        o = make(monkeypatch)
+        o.agents[second(o)]["tools"] = None
+        row = await o.workers.spawn(second(o), "Ship the hotfix", "", [])
+        await until(lambda: store.reports_of(row["id"]))
+        watches = [w for w in db.list_watches() if w["session"] == row["id"]]
+        assert len(watches) == 1 and watches[0]["status"] == "cancelled"
+        assert watches[0]["last_out"] == "Its task reported ready."
+        told = json.dumps(store.log_all(row["id"], 50))
+        assert "stopped the watches this task still had running: 'ios build'" in told
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_a_handback_keeps_its_watches(isolated, monkeypatch):
+    _building(monkeypatch)
+    model = Hold(monkeypatch)
+    model.worker = [call("watch", action="start", name="ci", poll="https://builds.example/api/1", done_when="finished"),
+                    call("report", status="handback", summary="Needs a reviewer."), say("NO_REPLY")]
+
+    async def main():
+        o = make(monkeypatch)
+        o.agents[second(o)]["tools"] = None
+        row = await o.workers.spawn(second(o), "Fix the test", "", [])
+        await until(lambda: store.reports_of(row["id"]))
+        assert [w["status"] for w in db.list_watches() if w["session"] == row["id"]] == ["active"]
+        await wind_down(o)
+    asyncio.run(main())
+
+
 def test_the_board_comes_back_after_compaction(isolated, monkeypatch):
     model = Hold(monkeypatch)
     monkeypatch.setattr(llm, "quick", AsyncMock(return_value="digest"))

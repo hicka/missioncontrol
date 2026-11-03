@@ -41,8 +41,9 @@ def test_outcome_matches_regex():
     assert watch._by_pattern("completed failed", r"completed", r"failed") == "failed"
 
 
-def test_start_creates_an_active_watch_without_approval():
+def test_start_creates_an_active_watch_without_approval(monkeypatch):
     import db
+    _polls(monkeypatch, "status: in_progress")
     o = _orch()
     aid = list(o.agents)[0]
     out = asyncio.run(o._exec_tool(aid, "~", "watch", {
@@ -66,9 +67,10 @@ def test_start_requires_a_stop_condition_and_a_safe_poll():
         "action": "start", "name": "x", "poll": "echo hi", "done_when": "([unclosed"}))
 
 
-def test_interval_and_checks_are_clamped():
+def test_interval_and_checks_are_clamped(monkeypatch):
     import db
     import watch
+    _polls(monkeypatch, "status: in_progress")
     o = _orch()
     aid = list(o.agents)[0]
     asyncio.run(o._exec_tool(aid, "~", "watch", {
@@ -260,6 +262,7 @@ def test_resolve_when_is_stored_as_the_goal(monkeypatch):
     import db
     import decide
     monkeypatch.setattr(decide, "configured", lambda: True)
+    _polls(monkeypatch, "status: in_progress")
     o = _orch()
     aid = list(o.agents)[0]
     out = asyncio.run(o._exec_tool(aid, "~", "watch", {
@@ -310,3 +313,46 @@ def test_unmatched_pattern_falls_back_to_the_name_as_goal(monkeypatch):
     asked.clear()
     assert asyncio.run(watch._outcome({**w, "name": ""}, "laravel-tests\tpass\n")) is None
     assert asked == []
+
+
+# ---------- a watch tries its poll first, and outlives nothing ----------
+
+def test_a_watch_whose_first_poll_fails_is_never_started(monkeypatch):
+    import db
+    _polls(monkeypatch, RuntimeError("HTTP 404"))
+    o = _orch()
+    aid = list(o.agents)[0]
+    out = asyncio.run(o._exec_tool(aid, "~", "watch", {
+        "action": "start", "name": "first poll 404", "poll": "https://builds.example/api/1", "done_when": "finished"}))
+    assert out.startswith("not watching: the first poll failed") and "HTTP 404" in out
+    assert not [w for w in db.list_watches("active") if w["name"].startswith("first poll")]
+
+
+def test_a_watch_whose_first_poll_already_answers_is_not_needed(monkeypatch):
+    import db
+    _polls(monkeypatch, 'HTTP 200\n{"status":"finished"}')
+    o = _orch()
+    aid = list(o.agents)[0]
+    out = asyncio.run(o._exec_tool(aid, "~", "watch", {
+        "action": "start", "name": "first poll done", "poll": "https://builds.example/api/1", "done_when": '"status":"finished"'}))
+    assert out.startswith("not watching: the first poll already shows it finished")
+    assert not [w for w in db.list_watches("active") if w["name"].startswith("first poll")]
+
+
+def test_a_broken_watch_does_not_wake_a_task_that_has_finished(monkeypatch):
+    import db
+    import kernel_store
+    import runtime_store
+    import watch
+    aid = "atlas"
+    mission = runtime_store.mission_create(aid, "dm:atlas", "ship it")
+    runtime_store.mission_set(mission["id"], "completed")
+    row = kernel_store.session_create("worker", aid, mission=mission["id"], title="ship it", status="idle")
+    wid = db.add_watch(aid, "build", "https://builds.example/api/1", "finished", None, 20, 40, aid,
+                       mission=mission["id"], session=row["id"])
+    _polls(monkeypatch, *[RuntimeError("HTTP 404")] * watch.BROKEN_AFTER)
+    orch = _FakeOrch(aid)
+    _tick_times(orch, watch.BROKEN_AFTER)
+    w = db.get_watch(wid)
+    assert w["status"] == "expired" and w["notified"]
+    assert not orch.fired
