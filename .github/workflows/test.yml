@@ -21,6 +21,33 @@ jobs:
       - name: Run tests
         run: python -m pytest tests/ -q
 
+  # The native app, compiled as a release compiles it, so a Swift mistake shows on the
+  # pull request rather than on the day of a release. No engine, browser or Developer ID
+  # signing: those belong to the release and its secrets.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the app
+        run: python3 scripts/build_macos.py --no-runtime
+      - name: Check the bundle
+        run: |
+          plutil -lint "dist/native/Mission Control.app/Contents/Info.plist"
+          codesign --verify --deep --strict "dist/native/Mission Control.app"
+      - name: Compile the bar's shader
+        # The shader ships as source and is compiled when the bar first draws, so this is
+        # the only place a mistake in it shows before someone opens the app.
+        run: |
+          cat > "$RUNNER_TEMP/shader.swift" <<'EOF'
+          import Foundation
+          import Metal
+          guard let device = MTLCreateSystemDefaultDevice() else { print("No Metal device on this runner, skipped."); exit(0) }
+          let source = try String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8)
+          do { _ = try device.makeLibrary(source: source, options: nil); print("BarAura.metal compiles.") }
+          catch { print(error); exit(1) }
+          EOF
+          swift "$RUNNER_TEMP/shader.swift" native/macos/BarAura.metal
+
   docker:
     runs-on: ubuntu-latest
     steps:
