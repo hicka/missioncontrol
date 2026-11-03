@@ -42,6 +42,8 @@ private func look(_ pulse: Pulse) -> (a: SIMD3<Float>, b: SIMD3<Float>, c: SIMD3
     case .thinking: return (blue, violet, pink, 0.62)
     case .streaming: return (violet, pink, .init(1, 0.58, 0.28), 0.74)
     case .working: return (blue, .init(0.2, 0.85, 0.92), .init(0.3, 0.95, 0.68), 0.5)
+    // Open work that is not moving right now: the working colours, cooled and slowed.
+    case .waiting: return (.init(0.3, 0.5, 0.88), .init(0.26, 0.62, 0.78), .init(0.36, 0.7, 0.66), 0.2)
     case .attention: return (.init(0.98, 0.7, 0.25), .init(1, 0.45, 0.2), .init(1, 0.85, 0.42), 0.42)
     case .listening: return (blue, violet, pink, 0.55)
     case .speaking: return (.init(0.3, 0.9, 0.85), violet, blue, 0.5)
@@ -107,7 +109,7 @@ final class AuraView: NSView {
     private struct Ripple { var age: Float = 0; let tint: SIMD3<Float>; let strength: Float; let speed: Float; let life: Float }
     private var ripples: [Ripple] = []
 
-    private struct Satellite { let id: String; let tint: SIMD3<Float>; var angle: Float; let speed: Float; var alpha: Spring; var orbit: Spring; var leaving = false }
+    private struct Satellite { let id: String; let tint: SIMD3<Float>; var angle: Float; let speed: Float; var alpha: Spring; var orbit: Spring; var leaving = false; var resting = false }
     private var satellites: [Satellite] = []
 
     private let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -262,21 +264,30 @@ final class AuraView: NSView {
         leanY.velocity -= 90
     }
 
-    /// One light per running task. A task that ends falls into the orb and sets off a ripple.
-    func setSatellites(_ wanted: [(id: String, tint: SIMD3<Float>)]) {
-        for index in satellites.indices where !satellites[index].leaving && !wanted.contains(where: { $0.id == satellites[index].id }) {
-            satellites[index].leaving = true
-            satellites[index].orbit.target = 0
-            satellites[index].alpha.target = 0
-            ripple(satellites[index].tint, strength: 0.9, speed: 200)
+    /// One light per open task. A task that ends falls into the orb and sets off a ripple; one
+    /// that is waiting stays in orbit, dimmed and slowed, because it has not finished.
+    func setSatellites(_ wanted: [(id: String, tint: SIMD3<Float>, resting: Bool)]) {
+        for index in satellites.indices where !satellites[index].leaving {
+            guard let item = wanted.first(where: { $0.id == satellites[index].id }) else {
+                satellites[index].leaving = true
+                satellites[index].orbit.target = 0
+                satellites[index].alpha.target = 0
+                ripple(satellites[index].tint, strength: 0.9, speed: 200)
+                continue
+            }
+            satellites[index].resting = item.resting
+            satellites[index].alpha.target = item.resting ? Self.restingAlpha : 1
         }
         for item in wanted.prefix(8) where !satellites.contains(where: { $0.id == item.id }) {
             var orbit = Spring(0, response: 0.7, damping: 0.6); orbit.target = 1
-            var alpha = Spring(0, response: 0.4, damping: 1); alpha.target = 1
+            var alpha = Spring(0, response: 0.4, damping: 1); alpha.target = item.resting ? Self.restingAlpha : 1
             let spread = Float(satellites.count) * 1.05
-            satellites.append(Satellite(id: item.id, tint: item.tint, angle: spread, speed: 1.1 + Float(satellites.count) * 0.13, alpha: alpha, orbit: orbit))
+            satellites.append(Satellite(id: item.id, tint: item.tint, angle: spread, speed: 1.1 + Float(satellites.count) * 0.13,
+                                        alpha: alpha, orbit: orbit, resting: item.resting))
         }
     }
+
+    private static let restingAlpha: Float = 0.38
 
     // MARK: Pointer
 
@@ -351,7 +362,7 @@ final class AuraView: NSView {
         for index in satellites.indices {
             satellites[index].alpha.step(dt)
             satellites[index].orbit.step(dt)
-            let speedUp: Float = satellites[index].leaving ? 5 : 1
+            let speedUp: Float = satellites[index].leaving ? 5 : satellites[index].resting ? 0.3 : 1
             if !reduceMotion { satellites[index].angle += dt * satellites[index].speed * speedUp }
         }
         satellites.removeAll { $0.leaving && $0.alpha.value < 0.02 }
