@@ -162,8 +162,9 @@ These work in the app and on messaging channels. Most answer without a model cal
 talking to the agent and seeing what it is doing (`⌥Space`). Once signed releases are
 published it will keep itself up to date from them. Its data stays in your user profile. Build it with
 `./venv/bin/python scripts/build_macos.py`, or see the
-[native macOS guide](docs/native-macos.md). macOS and Windows builds also come out of
-the [build workflow](.github/workflows/build.yml).
+[native macOS guide](docs/native-macos.md). The newest unsigned macOS and Windows builds
+of master are always at [Latest build](https://github.com/hicka/missioncontrol/releases/tag/latest-build),
+from the [build workflow](.github/workflows/build.yml).
 
 **Docker.** See the [`Dockerfile`](Dockerfile) and
 [`docker-compose.example.yml`](docker-compose.example.yml). Set your own `MC_API_TOKEN`.

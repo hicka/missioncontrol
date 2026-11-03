@@ -105,6 +105,11 @@ nothing reaches installed apps from a plain push. To ship:
 git tag -a v1.3.0 -m "v1.3.0" && git push origin v1.3.0
 ```
 
+**Every push to master** builds the apps unsigned and replaces one pre-release,
+[Latest build](https://github.com/hicka/missioncontrol/releases/tag/latest-build), with them, so the newest build is always a
+download away. A pre-release is never GitHub's "latest", which is where the update feed is
+read, so no installed app updates to it. A newer push cancels an older build still running.
+
 The workflow tests, builds, signs, notarizes, writes the feed, and only then publishes, so the
 feed never points at a half-finished release. It needs these on a `release` environment in
 the repository:
