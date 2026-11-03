@@ -606,7 +606,9 @@ def test_a_task_the_owner_asked_for_cannot_end_in_silence(isolated, monkeypatch)
         await until(lambda: store.reports_of(row["id"]))
         assert store.reports_of(row["id"])[0]["status"] == "failed"
         await until(lambda: runtime_store.mission_get(mission["id"])["status"] == "failed")
-        assert [i for i in store.inbox_pending("router") if i["kind"] == "report"] or model.router_calls
+        # The Router may have taken the report off its queue an instant before it calls
+        # the model, when neither is true yet, so this waits for one of them.
+        await until(lambda: [i for i in store.inbox_pending("router") if i["kind"] == "report"] or model.router_calls)
         await wind_down(o)
     asyncio.run(main())
 
