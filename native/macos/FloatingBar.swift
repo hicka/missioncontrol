@@ -42,7 +42,7 @@ final class HotKey {
 
 // MARK: What the bar says
 
-enum Pulse: Equatable { case offline, idle, thinking, streaming, working, attention, listening, speaking }
+enum Pulse: Equatable { case offline, idle, thinking, streaming, working, waiting, attention, listening, speaking }
 
 struct BarStatus: Equatable {
     var pulse: Pulse
@@ -73,12 +73,23 @@ extension Store {
             return BarStatus(pulse: .thinking, title: "Thinking…")
         }
         let working = workers.filter { $0.status.str == "working" }
+        // A task waiting on a build, a watch or a reply is open work too. Left out, the bar
+        // said "Ask anything" over it, and the owner read that as nothing happening.
+        let waiting = workers.filter { Self.paused.contains($0.status.str) }
         if let first = working.first {
+            let also = waiting.isEmpty ? "" : " · \(waiting.count) waiting"
             return BarStatus(pulse: .working, title: working.count == 1 ? clip(first.title.str, 44) : "\(working.count) tasks running",
-                             detail: working.count == 1 ? name(first.profile.str) : clip(first.title.str, 44))
+                             detail: (working.count == 1 ? name(first.profile.str) : clip(first.title.str, 44)) + also)
+        }
+        if let first = waiting.first {
+            return BarStatus(pulse: .waiting, title: waiting.count == 1 ? clip(first.title.str, 44) : "\(waiting.count) tasks waiting",
+                             detail: waiting.count == 1 ? "Waiting · \(name(first.profile.str))" : clip(first.title.str, 44))
         }
         return BarStatus(pulse: .idle, title: "Ask anything")
     }
+
+    /// Open, but not moving right now.
+    static let paused: Set<String> = ["waiting", "blocked"]
 }
 
 /// The end of a reply still being written, in one line, with no markdown showing through.
@@ -414,16 +425,17 @@ final class BarController: NSObject, NSWindowDelegate {
             if status.pulse == .attention { aura.nudge(); aura.ripple(SIMD3(1, 0.7, 0.25)); haptic() }
             if status.pulse == .listening { aura.ripple(SIMD3(0.5, 0.6, 1), strength: 0.8) }
             if status.pulse == .thinking && lastPulse == .idle { aura.ripple(SIMD3(0.5, 0.5, 1), strength: 0.7, speed: 320) }
-            if [.thinking, .streaming, .working].contains(lastPulse), status.pulse == .idle { aura.ripple(SIMD3(0.3, 0.95, 0.55), strength: 0.9, speed: 280) }
+            if [.thinking, .streaming, .working, .waiting].contains(lastPulse), status.pulse == .idle { aura.ripple(SIMD3(0.3, 0.95, 0.55), strength: 0.9, speed: 280) }
             lastPulse = status.pulse
         }
         if store.inbox.count > lastInbox, lastPulse == .attention, lastInbox > 0 { aura.nudge() }
         lastInbox = store.inbox.count
-        let working = store.workers.filter { $0.status.str == "working" }
-        let ids = Set(working.map(\.id))
+        // Waiting tasks keep their light, dimmed: dropping it looked exactly like finishing.
+        let open = store.workers.filter { $0.status.str == "working" || Store.paused.contains($0.status.str) }
+        let ids = Set(open.map { "\($0.id)|\($0.status.str == "working")" })
         if ids != lastWorking {
             lastWorking = ids
-            aura.setSatellites(working.map { (id: $0.id, tint: tintVector(hex: store.agent($0.profile.str)?.color ?? "")) })
+            aura.setSatellites(open.map { (id: $0.id, tint: tintVector(hex: store.agent($0.profile.str)?.color ?? ""), resting: $0.status.str != "working") })
         }
     }
 
