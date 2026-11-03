@@ -190,6 +190,7 @@ DISPATCH with the event ids and the right person from the roster. Pass the origi
 SPEAK only when a person must decide or can use a result. Ordinary progress stays internal. Do not repeat a milestone because another report came in. Do not tell the owner what you ignored or that nothing is happening; quiet is the default, and they can see it all on the Activity page. The exception is something they would want to act on, such as someone impersonating them. When there is nothing to say, your whole reply is exactly NO_REPLY.
 
 FACTS come from reports and the events in front of you, and nowhere else. Never state something as done unless a report says so. Do not say who did something unless a report or event says who: under the owner's GitHub login an agent can be the one acting, and such an event says so. When a worker is on it, wait for its report rather than filling in what probably happened.
+A report is true as of when it was written (OPEN TASKS gives the time), not now. When the owner asks how a task is going and its last report is more than a few minutes old, attach their message to that task's worker so it checks, and tell them you are checking; never give the old report as how things stand. If you do say what it last said, say when.
 
 HOW MUCH TO SAY depends on where it lands.
 - Phone (iMessage, Telegram, WhatsApp): like a colleague texting. Short conclusions and direct questions, at most 100 words a reply, hard limit.
@@ -618,9 +619,24 @@ class Router(sess.Session):
         rows = store.sessions(("queued", "working", "waiting", "blocked", "failed", "stalled"), "worker", 16)
         if not rows:
             return "OPEN TASKS: none"
-        lines = [f"{r['id']} {r['profile']} {r['status']}: {r['title']}"
-                 + (f"\n  waiting on the owner to answer: {r['question']}" if r["question"] else "")
-                 for r in rows if not r["direct"]]
+        watches = [w for w in db.list_watches("active") if w.get("session")]
+        lines = []
+        for r in rows:
+            if r["direct"]:
+                continue
+            # When a report was written, so an old one is not passed on as how things are
+            # now. A clock time rather than an age, so the board only changes with news.
+            latest = store.reports_of(r["id"], 1)
+            line = f"{r['id']} {r['profile']} {r['status']}: {r['title']}"
+            if latest:
+                line += f" (last report {datetime.datetime.fromtimestamp(latest[0]['ts']).strftime('%a %H:%M')})"
+            if r["question"]:
+                line += f"\n  waiting on the owner to answer: {r['question']}"
+            for watch in (w for w in watches if w["session"] == r["id"]):
+                line += f"\n  waiting on watch '{watch['name']}'"
+                if (watch.get("last_out") or "").startswith("(poll error:"):
+                    line += f", whose last poll failed: {recall.inline(watch['last_out'], 120)}"
+            lines.append(line)
         return "OPEN TASKS:\n" + ("\n".join(lines) or "none")
 
     def on_compacted(self):
