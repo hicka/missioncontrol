@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How Mission Control works</title>
+<meta name="description" content="How Mission Control's one agent and its isolated workers take a request from arrival to a confirmed result.">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<nav class="nav" aria-label="Site">
+  <div class="wrap">
+    <a class="brand" href="./">Mission Control</a>
+    <a href="how-it-works.html" aria-current="page">How it works</a>
+    <a href="super-agent.html" class="optional">Super-agent</a>
+    <a href="./#download">Download</a>
+    <a href="https://github.com/hicka/missioncontrol" class="optional">GitHub</a>
+  </div>
+</nav>
+
+<main class="page">
+  <section class="hero">
+    <div class="prose">
+      <p class="eyebrow">How it works</p>
+      <h1>One agent you talk to. A team that does the work.</h1>
+      <p class="lede">To you, Mission Control is one colleague who always knows what is going on. Behind it, one agent decides and a pool of workers act, each on one task, in parallel.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="prose">
+      <h2>It runs on your Mac</h2>
+      <p>The engine runs on your own computer, and so does everything it remembers. The Mac app starts it, or connects to one already running, and the iPhone app talks to it directly over your network or Tailscale. There is no Mission Control cloud and no account.</p>
+      <p>You choose the model: Anthropic, OpenAI, DeepSeek, MiniMax, a local one through Ollama or LM Studio, or any compatible endpoint. Each specialist can use its own.</p>
+
+      <h2>Everything arrives in one place</h2>
+      <p>Your messages from the app, the bar, your iPhone, iMessage, Telegram, WhatsApp and email. GitHub comments, reviews and CI runs. Scheduled jobs, the watches tasks set, and other machines running Mission Control. Each event is recorded once, with the conversation it belongs to.</p>
+      <p>Who an event came from is settled in code before any model reads it. You are always heard. Every other source is set to be acted on, considered, or ignored. A local filter may set aside what it is sure is noise, and nothing else. Every event ends with a visible outcome on the Activity page: answered, routed, passed to a task, ignored, or refused.</p>
+
+      <h2>One agent decides</h2>
+      <p>One long-lived session reads what arrived, in batches, and decides. It answers you, starts a task with the right specialist, or adds a follow-up to a task already under way. It has no shell, and it does not do the work itself: anything that needs a tool goes to a worker, so you never wait behind a job.</p>
+      <p>It is the only voice. It speaks when someone has to decide something or can use a result, and stays quiet otherwise. When a task already follows a thread, such as a pull request it opened, new events on that thread go straight to the task without a decision being spent on them.</p>
+
+      <h2>Workers do the work</h2>
+      <ul>
+        <li><strong>One task, one session.</strong> Each worker has its specialist's tools and instructions, and works on nothing else. Up to six run at once by default, with a place always kept for you.</li>
+        <li><strong>Slow work runs in the background.</strong> A long command moves to the background on its own, and the worker is woken when it finishes.</li>
+        <li><strong>Watches wait for the world.</strong> A worker can watch a build or a deploy until it finishes. The watch tries its check once before it starts, stops if the check keeps failing, and ends with its task.</li>
+        <li><strong>No two tasks in the same working copy.</strong> One task at a time has a repository's checkout. Another that needs it meanwhile gets its own copy-on-write clone.</li>
+      </ul>
+
+      <h2>Authority is settled in code</h2>
+      <p>The model reading a request is what an attacker would aim at, so what a task may do depends on who started it, never on what a model concludes.</p>
+      <table class="table">
+        <thead><tr><th>Started by</th><th>What it may do</th></tr></thead>
+        <tbody>
+          <tr><th>You</th><td>The work you asked for, with your tools and keys, for as long as the task lasts.</td></tr>
+          <tr><th>A job you set up</th><td>Its own instructions. A push, deploy, merge or message waits for your approval.</td></tr>
+          <tr><th>An outside event</th><td>Read and investigate. Anything outward or on the network waits for your approval, and it runs without your keys.</td></tr>
+        </tbody>
+      </table>
+      <p>A held command waits in your Inbox, on the bar and on your iPhone, shown in full and run exactly as shown. An outward action that already happened in the last hour is not repeated, even across restarts. Merging stays your decision.</p>
+      <div class="note"><p><strong>This is defence in depth, not a sandbox.</strong> Workers run as your user on your Mac. Treat letting strangers' messages start work as letting them suggest work to something that has your files.</p></div>
+
+      <h2>A task is done when it is confirmed</h2>
+      <p>Only a report ends a task, and work you asked for has a finish line: what you asked for, as a few checks in your words. A task cannot report itself finished until every check is done, each with how it was confirmed. If it stops with something still open, it asks you whether to carry on instead of being filed as done.</p>
+      <p>Reports reach you wherever you last spoke. A question a task needs answered stays in your Inbox until you answer it, and when you ask how something is going, the agent says how fresh its information is or has the task check.</p>
+
+      <h2>It looks after itself</h2>
+      <ul>
+        <li><strong>A watchdog</strong> checks that every task is really getting somewhere, and nudges or restarts what is not.</li>
+        <li><strong>Restarts are safe.</strong> Tasks pick up where they were, told to check the real state before repeating anything outward.</li>
+        <li><strong>Self-repair</strong> finds Mission Control's own recurring problems and fixes them on a tested branch, landing them when you allow it. It cannot touch the files that hold these rules.</li>
+      </ul>
+
+      <h2>Staying current</h2>
+      <p>The newest build of the desktop apps is made from every change and is always on the <a href="https://github.com/hicka/missioncontrol/releases/tag/latest-build">Latest build</a> page. Signed releases will update themselves, waiting until nothing is running. A copy run from source can follow releases too.</p>
+      <p>The full design, with every rule and its reason, is in <a href="https://github.com/hicka/missioncontrol/blob/master/docs/super-agent.md">docs/super-agent.md</a>.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span class="grow">Mission Control is an independent open-source project, not affiliated with DeepSeek.</span>
+    <a href="privacy.html">Privacy</a>
+    <a href="support.html">Support</a>
+    <a href="https://github.com/hicka/missioncontrol">GitHub</a>
+  </div>
+</footer>
+</body>
+</html>

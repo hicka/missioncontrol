@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mission Control</title>
+<meta name="description" content="One agent. A whole team in motion. An open-source agent for your Mac, with an always-on floating bar and an iPhone app.">
+<meta property="og:title" content="Mission Control">
+<meta property="og:description" content="One agent. A whole team in motion.">
+<meta property="og:image" content="https://hicka.github.io/missioncontrol/media/mac-and-iphone.jpg">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<nav class="nav" aria-label="Site">
+  <div class="wrap">
+    <a class="brand" href="./">Mission Control</a>
+    <a href="how-it-works.html">How it works</a>
+    <a href="super-agent.html" class="optional">Super-agent</a>
+    <a href="#download">Download</a>
+    <a href="https://github.com/hicka/missioncontrol" class="optional">GitHub</a>
+  </div>
+</nav>
+
+<main>
+  <section class="hero center">
+    <div class="wrap">
+      <h1>Mission Control</h1>
+      <p class="lede">One agent. A whole team in motion. Tell it what you need from your Mac, your iPhone or a message. It plans the work, runs it in parallel, and comes back to you only when something needs a decision.</p>
+      <div class="downloads">
+        <a class="button primary" href="https://github.com/hicka/missioncontrol/releases/download/latest-build/MissionControl-macOS.zip">Download for Mac</a>
+        <a class="button" href="https://github.com/hicka/missioncontrol/releases/download/latest-build/MissionControl-Windows-Setup.exe">Download for Windows</a>
+      </div>
+      <p class="fine">Open source, MIT licensed. Runs on your own computer, with the model of your choice.</p>
+      <div class="film">
+        <video src="media/bar.mp4" poster="media/bar-poster.jpg" autoplay muted loop playsinline aria-label="The floating bar takes a request, thinks, and splits it into three tasks that orbit the orb as they run."></video>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">The bar</p>
+      <h2>Always there. Never in the way.</h2>
+      <p class="lede">Press ⌥ Space, or hold it and talk. The bar sits at the bottom of your screen and shows what the agent is doing as it happens.</p>
+      <div class="grid two">
+        <figure><div class="shot"><img src="media/bar-thinking.jpg" alt="The bar reading Thinking, with the agent planning the work." loading="lazy"></div>
+          <figcaption>It thinks out loud, then gets going.</figcaption></figure>
+        <figure><div class="shot"><img src="media/bar-tasks.jpg" alt="The bar reading 3 tasks running, with a light orbiting the orb for each." loading="lazy"></div>
+          <figcaption>A light orbits the orb for every task in flight.</figcaption></figure>
+        <figure><div class="shot"><img src="media/bar-finished.jpg" alt="The bar reading Release notes finished." loading="lazy"></div>
+          <figcaption>Finished work falls into the orb and ripples along the bar.</figcaption></figure>
+        <figure><div class="shot"><img src="media/bar-needs-you.jpg" alt="An amber card above the bar: the build is ready, one decision needs your approval." loading="lazy"></div>
+          <figcaption>When something needs you, it turns amber and says what.</figcaption></figure>
+      </div>
+      <ul class="points">
+        <li><strong>Drawn natively.</strong> One Metal shader on its own display link. The orb and its glow move with the agent, at a couple of percent of one core while idle.</li>
+        <li><strong>Answers in place.</strong> Replies stream across the bar. Held commands show as cards you can review and run without opening anything else.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap split">
+      <div>
+        <p class="eyebrow">The Mac app</p>
+        <h2>Everything it is doing, at a glance.</h2>
+        <ul class="points">
+          <li><strong>Home and Tasks.</strong> What is running, what is waiting on you, and what finished, with every task's steps.</li>
+          <li><strong>Activity.</strong> Everything that reached the agent, and what became of it. The rules it acts by, in plain words you can change.</li>
+          <li><strong>Inbox.</strong> Anything that needs your say. A held command is shown in full, with what changed since you last approved one like it.</li>
+          <li><strong>Fully native.</strong> SwiftUI and AppKit, no web view. It lives in the menu bar and the floating bar when the window is closed.</li>
+        </ul>
+      </div>
+      <figure><div class="shot"><img src="media/mac-home.jpg" alt="Mission Control's Home screen: profiles, tasks in progress, and how clean the week's runs were." loading="lazy"></div></figure>
+    </div>
+    <div class="wrap grid two">
+      <figure><div class="shot"><img src="media/mac-activity.jpg" alt="The Activity screen: workers running, events and what became of them, and the rules the agent acts on." loading="lazy"></div>
+        <figcaption>Activity: every event, what became of it, and the rules it decided by.</figcaption></figure>
+      <figure><div class="shot"><img src="media/mac-wide.jpg" alt="A MacBook showing Mission Control, with the floating bar at the bottom of the screen." loading="lazy"></div>
+        <figcaption>The bar stays with you over whatever you are doing.</figcaption></figure>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap split flip">
+      <div>
+        <p class="eyebrow">iPhone</p>
+        <h2>The conversation goes with you.</h2>
+        <ul class="points">
+          <li><strong>Straight to your Mac.</strong> The app connects to the Mission Control running on your Mac, over your own network or Tailscale. No account, and nothing in between.</li>
+          <li><strong>Decide from anywhere.</strong> Approve or decline a held command, answer a task's question, or step into work in progress.</li>
+          <li><strong>Talk to it.</strong> Speech is recognised on the device when your iPhone supports it.</li>
+          <li><strong>Told when it matters.</strong> A notification when something needs you, and quiet otherwise.</li>
+        </ul>
+        <p class="fine">The iPhone app is coming to the App Store.</p>
+      </div>
+      <figure><div class="shot"><img src="media/iphone.jpg" alt="An iPhone running Mission Control, typing a request to the agent." loading="lazy"></div></figure>
+    </div>
+    <div class="wrap">
+      <figure class="grid"><div class="shot"><img src="media/iphone-screens.jpg" alt="Three iPhone screens: the Now screen with the Inbox, a task's page with its reports, and Activity." loading="lazy"></div>
+        <figcaption>Now, a task, and Activity on iPhone.</figcaption></figure>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">How it works</p>
+      <h2>One agent you talk to. A team that does the work.</h2>
+      <ol class="steps">
+        <li><span class="n">1</span><h3>Everything arrives</h3><p>Your messages, GitHub, CI, email, schedules: recorded in one place, each with what became of it.</p></li>
+        <li><span class="n">2</span><h3>One agent decides</h3><p>It reads what came in, answers you, and hands each piece of work to the right specialist.</p></li>
+        <li><span class="n">3</span><h3>Workers do the work</h3><p>Each task runs in its own session, in parallel, and never on top of another task's changes.</p></li>
+        <li><span class="n">4</span><h3>You hear what matters</h3><p>A result, or the one decision only you can make. Work you did not ask for cannot act outside your Mac without your OK.</p></li>
+      </ol>
+      <p class="fine"><a href="how-it-works.html">How Mission Control works, in full →</a></p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap split">
+      <div>
+        <p class="eyebrow">Built on the Super-agent design</p>
+        <h2>An idea from DeepSeek Harness, made to run on your Mac.</h2>
+        <p class="lede">Mission Control's core follows the Super-agent design DeepSeek Harness published in 2026: one coordinator that talks, and isolated workers that act. It is an independent implementation, with its own answers to authority, recovery and knowing when a task is really done.</p>
+        <p class="fine"><a href="super-agent.html">How the design was adopted, and how it works today →</a></p>
+      </div>
+      <figure><div class="shot"><img src="media/orb.jpg" alt="The orb, alone on black." loading="lazy"></div></figure>
+    </div>
+  </section>
+
+  <section id="download" class="center">
+    <div class="wrap">
+      <h2>Get Mission Control.</h2>
+      <p class="lede">The newest build of the desktop apps, made from the latest code on every change.</p>
+      <div class="downloads">
+        <a class="button primary" href="https://github.com/hicka/missioncontrol/releases/download/latest-build/MissionControl-macOS.zip">Mac · Apple silicon</a>
+        <a class="button" href="https://github.com/hicka/missioncontrol/releases/download/latest-build/MissionControl-Windows-Setup.exe">Windows installer</a>
+        <a class="button" href="https://github.com/hicka/missioncontrol/releases/download/latest-build/MissionControl-Windows.zip">Windows zip</a>
+      </div>
+      <p class="fine">These builds are not signed yet. On a Mac, the first time you open it, allow it under System Settings › Privacy &amp; Security › Open Anyway. macOS 14 or later.<br>
+        <a href="https://github.com/hicka/missioncontrol/releases/tag/latest-build">Release notes</a> · <a href="https://github.com/hicka/missioncontrol">Run it from source</a></p>
+      <figure class="film"><img src="media/mac-and-iphone.jpg" alt="Mission Control on a MacBook and an iPhone, side by side." loading="lazy"></figure>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span class="grow">Mission Control is an independent open-source project, not affiliated with DeepSeek.</span>
+    <a href="privacy.html">Privacy</a>
+    <a href="support.html">Support</a>
+    <a href="https://github.com/hicka/missioncontrol">GitHub</a>
+  </div>
+</footer>
+</body>
+</html>
