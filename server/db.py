@@ -650,12 +650,15 @@ def _ensure_watches():
         _db().execute("UPDATE watches SET notified=0 WHERE status='active'")
     if "notice_claimed" not in cols:
         _db().execute("ALTER TABLE watches ADD COLUMN notice_claimed REAL NOT NULL DEFAULT 0")
+    # How many polls in a row have failed with the same error.
+    if "errors" not in cols:
+        _db().execute("ALTER TABLE watches ADD COLUMN errors INTEGER NOT NULL DEFAULT 0")
     _db().commit()
 
 
 WATCH_COLS = ("id, ts, agent, name, poll, done_re, fail_re, interval, max_checks, "
               "checks, status, last_out, last_poll, created_by, cwd, mission, notified, "
-              "notice_claimed, goal, session")
+              "notice_claimed, goal, session, errors")
 
 
 def _watch_row(r) -> dict:
@@ -663,7 +666,8 @@ def _watch_row(r) -> dict:
             "done_re": r[5], "fail_re": r[6], "interval": r[7], "max_checks": r[8],
             "checks": r[9], "status": r[10], "last_out": r[11], "last_poll": r[12],
             "created_by": r[13], "cwd": r[14], "mission": r[15],
-            "notified": bool(r[16]), "notice_claimed": r[17], "goal": r[18], "session": r[19]}
+            "notified": bool(r[16]), "notice_claimed": r[17], "goal": r[18], "session": r[19],
+            "errors": r[20]}
 
 
 def add_watch(agent: str, name: str, poll: str, done_re: str | None,
@@ -738,12 +742,12 @@ def claim_watch(wid: int, checks: int, now: float) -> bool:
         return cur.rowcount > 0
 
 
-def finish_watch_poll(wid: int, status: str, out: str) -> bool:
+def finish_watch_poll(wid: int, status: str, out: str, errors: int = 0) -> bool:
     """Cancellation wins over a poll that was already in flight."""
     with _lock:
         _ensure_watches()
-        cur = _db().execute("UPDATE watches SET status=?, last_out=? WHERE id=? AND status='active'",
-                            (status, out[:4000], wid))
+        cur = _db().execute("UPDATE watches SET status=?, last_out=?, errors=? WHERE id=? AND status='active'",
+                            (status, out[:4000], errors, wid))
         _db().commit()
         return cur.rowcount > 0
 
