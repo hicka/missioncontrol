@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Built on the Super-agent design</title>
+<meta name="description" content="How Mission Control adopted DeepSeek Harness's Super-agent design, where it departs, and how it works today.">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<nav class="nav" aria-label="Site">
+  <div class="wrap">
+    <a class="brand" href="./">Mission Control</a>
+    <a href="how-it-works.html">How it works</a>
+    <a href="super-agent.html" aria-current="page" class="optional">Super-agent</a>
+    <a href="./#download">Download</a>
+    <a href="https://github.com/hicka/missioncontrol" class="optional">GitHub</a>
+  </div>
+</nav>
+
+<main class="page">
+  <section class="hero">
+    <div class="prose">
+      <p class="eyebrow">Super-agent</p>
+      <h1>Built on the Super-agent design.</h1>
+      <p class="lede">In 2026 DeepSeek Harness published <a href="https://x.com/DeepSeekHarness/status/2116857257245987236">Exploring Super-agent Design</a>, with a <a href="https://github.com/deepseek-ai/dsh-superagent-prototype">reference prototype</a>. In November 2026 Mission Control's core was rebuilt around it. This page covers what was taken, what was changed, and how it runs today.</p>
+      <p class="fine">Mission Control is an independent Python implementation, not a port of the prototype, and is not affiliated with or endorsed by DeepSeek.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="prose">
+      <h2>The idea</h2>
+      <p>Most agents are one conversation that does everything: it talks, it runs the tools, and while it works, nothing else gets its attention. The Super-agent design splits those apart. To the person there is one agent, always reachable, that always knows what is going on. Behind it, separate sessions do the work.</p>
+      <ul>
+        <li><strong>A coordinator and workers.</strong> One session reads what arrives and decides. Workers each take one task and act on it.</li>
+        <li><strong>Events and subscriptions.</strong> Everything that happens is an event on a thread. A worker can follow a thread and hear what concerns its task directly.</li>
+        <li><strong>Asynchronous by default.</strong> Nobody blocks on slow work. A worker is woken when what it is waiting for arrives.</li>
+        <li><strong>State apart from the loop.</strong> What a task knows lives outside any one process, so work survives a restart.</li>
+        <li><strong>A watchdog.</strong> Something outside the work checks that the work is really moving.</li>
+      </ul>
+      <p>The article is candid about what it leaves open: memory, scale, where one context ends and another begins, and security.</p>
+
+      <h2>How Mission Control adopted it</h2>
+      <table class="table">
+        <thead><tr><th>In the design</th><th>In Mission Control</th></tr></thead>
+        <tbody>
+          <tr><th>The coordinator</th><td>The Router: one long-lived session and the agent's only voice. It reads events in batches, answers, starts tasks and hands follow-ups to them. It has no shell. <code>server/router.py</code></td></tr>
+          <tr><th>Workers</th><td>One isolated session per task, with a specialist's tools and instructions, run in parallel with a place always kept for you. <code>server/workers.py</code></td></tr>
+          <tr><th>Events and threads</th><td>Every message, comment, CI run and schedule is recorded once, with its thread and a visible outcome. A worker that follows a thread gets its events with no decision spent. <code>server/triggers.py</code></td></tr>
+          <tr><th>Asynchronous work</th><td>Slow commands move to the background and wake the worker when they end. Watches poll a build or a deploy until it settles.</td></tr>
+          <tr><th>State apart from the loop</th><td>Transcripts, tasks, reports and the event log are kept in one local database. A restart picks every task up where it was.</td></tr>
+          <tr><th>The watchdog</th><td>A watchdog inside checks every session is getting somewhere, and a small one outside can restart the app if it stops answering. <code>server/watchdog.py</code></td></tr>
+        </tbody>
+      </table>
+
+      <h2>Where it departs</h2>
+      <ul>
+        <li><strong>It runs on your Mac, not in the cloud.</strong> State is already separate from the loop, so a restart resumes, but when the Mac sleeps, the agent sleeps.</li>
+        <li><strong>No remote shell.</strong> Work for another machine goes to the Mission Control on that machine, which has its own agent and its own hands. Nothing new on the network can run commands.</li>
+        <li><strong>A local noise filter reads first.</strong> Events from outside get a free read on your machine that may only drop what it is sure is noise.</li>
+        <li><strong>Direct lines.</strong> Write to a specialist by name and you reach it directly, in that chat, without the coordinator in between.</li>
+        <li><strong>Workers do not start workers.</strong> A worker that needs someone else hands the task back, and the coordinator starts them.</li>
+      </ul>
+
+      <h2>What it added</h2>
+      <p>Running the design every day, on real repositories and real messages, showed where a coordinator and workers need firmer ground than a prompt.</p>
+      <ul>
+        <li><strong>Authority in code.</strong> What a task may do depends on who started it: you, a job you set up, or an outside event. Never on what a model concludes. Outward commands from work you did not ask for wait for your approval, shown in full.</li>
+        <li><strong>Outward actions happen once.</strong> A push, deploy or message is remembered for an hour, across restarts and across workers, so a retry cannot repeat it.</li>
+        <li><strong>Done means confirmed.</strong> Work you asked for has a finish line, what you asked for as checks, and cannot be reported finished until each is confirmed. A task that stops short asks you rather than being filed as done.</li>
+        <li><strong>Waiting has to be real.</strong> A task may only wait on something that will wake it. Watches test their check before they start, stop when it keeps failing, and end with their task.</li>
+        <li><strong>Answers say how fresh they are.</strong> The coordinator sees when each task last reported, and asks the task rather than repeating an old report as current.</li>
+        <li><strong>Working copies.</strong> One task at a time holds a repository's checkout. Another that needs it gets a copy-on-write clone, so no task works on top of another's changes.</li>
+      </ul>
+      <div class="note"><p>Like the article, Mission Control treats security as unfinished. Its rules are defence in depth, not a sandbox: workers run as your user, on your Mac.</p></div>
+
+      <h2>How it works today</h2>
+      <ol class="steps">
+        <li><span class="n">Arrive</span><h3>Recorded</h3><p>Every event, once, with its thread. Who sent it decides what it may start.</p></li>
+        <li><span class="n">Decide</span><h3>The Router</h3><p>Answers, starts a task, or hands a follow-up to the task it belongs to.</p></li>
+        <li><span class="n">Work</span><h3>Workers</h3><p>In parallel and in isolation, waiting only on what will wake them.</p></li>
+        <li><span class="n">Report</span><h3>To you</h3><p>A confirmed result, or the one decision only you can make.</p></li>
+      </ol>
+      <p>The complete design, with each rule and the incident behind it, is in <a href="https://github.com/hicka/missioncontrol/blob/master/docs/super-agent.md">docs/super-agent.md</a>. For the everyday view, see <a href="how-it-works.html">How it works</a>.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span class="grow">Mission Control is an independent open-source project, not affiliated with DeepSeek.</span>
+    <a href="privacy.html">Privacy</a>
+    <a href="support.html">Support</a>
+    <a href="https://github.com/hicka/missioncontrol">GitHub</a>
+  </div>
+</footer>
+</body>
+</html>

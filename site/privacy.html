@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy · Mission Control</title>
+<meta name="description" content="Mission Control's privacy policy for its iPhone, Mac and Windows apps.">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<nav class="nav" aria-label="Site">
+  <div class="wrap">
+    <a class="brand" href="./">Mission Control</a>
+    <a href="how-it-works.html">How it works</a>
+    <a href="super-agent.html" class="optional">Super-agent</a>
+    <a href="./#download">Download</a>
+    <a href="https://github.com/hicka/missioncontrol" class="optional">GitHub</a>
+  </div>
+</nav>
+
+<main class="page">
+  <section class="hero">
+    <div class="prose">
+      <h1>Privacy Policy</h1>
+      <p class="updated">Effective 3 November 2026</p>
+
+      <p>This policy covers the Mission Control apps for iPhone, Mac and Windows, published as open source at <a href="https://github.com/hicka/missioncontrol">github.com/hicka/missioncontrol</a> and <a href="https://github.com/hicka/missioncontrol-mobile">github.com/hicka/missioncontrol-mobile</a>.</p>
+
+      <div class="note"><p><strong>In short:</strong> Mission Control runs on your own computer. We do not run a service for it, there is no account, and the apps contain no analytics, advertising or tracking. We do not collect, receive, sell or share your data. What you do in Mission Control stays on your devices and goes only to the services you choose to connect.</p></div>
+
+      <h2>The iPhone app</h2>
+      <p>The iPhone app is a client for the Mission Control running on your own computer. It connects only to the address you give it.</p>
+      <h3>Stored on your iPhone</h3>
+      <ul>
+        <li>The address of your Mission Control and its access token, kept in the iOS Keychain.</li>
+        <li>Your appearance setting.</li>
+      </ul>
+      <h3>Sent to your own Mission Control</h3>
+      <ul>
+        <li>The messages you write or say, your answers and approvals, and the photos and files you choose to attach.</li>
+      </ul>
+      <p>If you reach your computer through a network service such as Tailscale, that service carries the connection under its own privacy policy.</p>
+      <h3>Microphone and speech recognition</h3>
+      <p>The app listens only while you are talking to it. On iPhones that support it, your speech is turned into text on the device. Otherwise iOS sends the audio to Apple's speech recognition service, under <a href="https://www.apple.com/legal/privacy/">Apple's privacy policy</a>. The text goes to your own Mission Control.</p>
+      <h3>Photos and files</h3>
+      <p>The app reads only the photos and files you pick to attach, and sends them to your own Mission Control.</p>
+      <h3>Notifications</h3>
+      <p>If you allow notifications, the app gets a push token from Expo's notification service and gives it to your own Mission Control. When something needs you, your Mission Control sends a short notification, a title and a line of text, through <a href="https://expo.dev/privacy">Expo's push service</a> and Apple's push notification service, which pass it to your iPhone. You can turn notifications off at any time in iOS Settings.</p>
+
+      <h2>The Mac and Windows apps</h2>
+      <h3>Stored on your computer</h3>
+      <p>Your conversations, tasks, memory, settings and the keys you enter are stored on your computer, in Mission Control's data folder.</p>
+      <h3>Sent to services you set up</h3>
+      <p>Mission Control sends data only to the services you configure, and only what they need:</p>
+      <ul>
+        <li><strong>AI model providers you choose</strong>, such as Anthropic, OpenAI, DeepSeek or MiniMax, receive the conversation and task content needed to answer. A local model, through Ollama or LM Studio, keeps this on your computer.</li>
+        <li><strong>Channels you connect</strong>, such as iMessage, Telegram, WhatsApp, email and GitHub, carry messages through those services.</li>
+        <li><strong>A public tunnel,</strong> if you turn it on so GitHub can reach your computer, is provided by Cloudflare.</li>
+        <li><strong>Remote decisions,</strong> if you turn them on with a Jev key from typesafe.ai, send short descriptions of commands and watch results, with secrets removed, for a yes or no.</li>
+        <li><strong>Updates</strong> are checked on GitHub.</li>
+      </ul>
+      <p>Each of these services is governed by its own terms and privacy policy.</p>
+
+      <h2>Your choices</h2>
+      <ul>
+        <li>Delete the app, or its data folder, to remove everything it stored.</li>
+        <li>Change the access token on your computer to cut off a phone's access.</li>
+        <li>Turn off notifications, microphone or photo access in your device's settings.</li>
+      </ul>
+
+      <h2>Children</h2>
+      <p>Mission Control is not directed to children under 13.</p>
+
+      <h2>Changes</h2>
+      <p>If this policy changes, the new version is posted on this page with its effective date.</p>
+
+      <h2>Contact</h2>
+      <p>Questions about this policy: open an issue at <a href="https://github.com/hicka/missioncontrol/issues">github.com/hicka/missioncontrol/issues</a>, or see <a href="support.html">Support</a>.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span class="grow">Mission Control is an independent open-source project, not affiliated with DeepSeek.</span>
+    <a href="privacy.html" aria-current="page">Privacy</a>
+    <a href="support.html">Support</a>
+    <a href="https://github.com/hicka/missioncontrol">GitHub</a>
+  </div>
+</footer>
+</body>
+</html>

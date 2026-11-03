@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Support · Mission Control</title>
+<meta name="description" content="Help with Mission Control on Mac, Windows and iPhone, and how to reach us.">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<nav class="nav" aria-label="Site">
+  <div class="wrap">
+    <a class="brand" href="./">Mission Control</a>
+    <a href="how-it-works.html">How it works</a>
+    <a href="super-agent.html" class="optional">Super-agent</a>
+    <a href="./#download">Download</a>
+    <a href="https://github.com/hicka/missioncontrol" class="optional">GitHub</a>
+  </div>
+</nav>
+
+<main class="page">
+  <section class="hero">
+    <div class="prose">
+      <h1>Support</h1>
+      <p class="lede">Help with Mission Control on Mac, Windows and iPhone.</p>
+
+      <h2>Contact</h2>
+      <ul>
+        <li><strong>Questions and problems:</strong> open an issue at <a href="https://github.com/hicka/missioncontrol/issues">github.com/hicka/missioncontrol/issues</a>. For the iPhone app, <a href="https://github.com/hicka/missioncontrol-mobile/issues">github.com/hicka/missioncontrol-mobile/issues</a>.</li>
+        <li><strong>Security issues:</strong> report them privately at <a href="https://github.com/hicka/missioncontrol/security/advisories/new">github.com/hicka/missioncontrol/security</a>, not in a public issue.</li>
+      </ul>
+      <p>Include what you did, what happened, and your app and system versions. Leave out keys, tokens and anything private.</p>
+
+      <h2>Getting started</h2>
+      <ol>
+        <li><strong>Install it on your Mac.</strong> Download it from the <a href="./#download">download section</a>, unzip it, and move Mission Control to Applications. The first time you open it, allow it under System Settings › Privacy &amp; Security › Open Anyway.</li>
+        <li><strong>Plug in a model.</strong> On first launch Mission Control asks for one: a local model running in Ollama or LM Studio, or an API key from Anthropic, OpenAI, DeepSeek, MiniMax or another provider. Keys stay on your Mac.</li>
+        <li><strong>Talk to it.</strong> Press ⌥ Space for the floating bar, or hold ⌥ Space to speak.</li>
+      </ol>
+
+      <h2>Connecting your iPhone</h2>
+      <ol>
+        <li>On your Mac, open Mission Control › Settings › Mobile access, turn it on, and restart Mission Control. The access token for your phone appears there.</li>
+        <li>In the iPhone app, enter your Mac's address with port 8899, such as <code>http://100.x.y.z:8899</code>, and the token, then tap Connect.</li>
+        <li>Tap Register this phone to get a notification when something needs you.</li>
+      </ol>
+      <p>Your iPhone needs to reach your Mac: on the same network, or from anywhere through <a href="https://tailscale.com">Tailscale</a>, using the address Tailscale gives your Mac.</p>
+
+      <h2>Common questions</h2>
+      <h3>Does my Mac need to stay on?</h3>
+      <p>Yes. The agent runs on your Mac, so when your Mac sleeps, the agent sleeps. Work picks up where it was when your Mac wakes.</p>
+      <h3>Where does my data go?</h3>
+      <p>It stays on your Mac, except what goes to the model provider and the channels you connect. See the <a href="privacy.html">Privacy Policy</a>.</p>
+      <h3>The iPhone app cannot connect.</h3>
+      <p>Check that Mission Control is running on your Mac and that Mobile access is on, with a restart since you turned it on. Make sure the address includes <code>http://</code> and the port, and that your phone can reach your Mac: the same Wi-Fi, or Tailscale running on both. If you made a new token on the Mac, enter the new one on the phone.</p>
+      <h3>macOS says the app cannot be opened.</h3>
+      <p>Builds are not signed yet. Open System Settings › Privacy &amp; Security, scroll down, and choose Open Anyway next to Mission Control.</p>
+      <h3>How do I stop something the agent is doing?</h3>
+      <p>Open the task, from the bar, the Tasks page or your iPhone, and choose Stop. It stops the task, everything it started, its watches and its held commands. Pause on the Activity page stops picking up new work without stopping the app.</p>
+      <h3>How do I remove Mission Control?</h3>
+      <p>Quit it, delete the app, and delete its data folder, <code>~/Library/Application Support/MissionControl</code>. On iPhone, delete the app.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span class="grow">Mission Control is an independent open-source project, not affiliated with DeepSeek.</span>
+    <a href="privacy.html">Privacy</a>
+    <a href="support.html" aria-current="page">Support</a>
+    <a href="https://github.com/hicka/missioncontrol">GitHub</a>
+  </div>
+</footer>
+</body>
+</html>
