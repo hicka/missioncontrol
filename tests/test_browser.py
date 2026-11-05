@@ -152,3 +152,29 @@ def test_browser_turn_receives_live_state_and_image_content(isolated, monkeypatc
     assert kernel_store.reports_of(row['id'])[0]['summary'] == 'Menu inspected'
     # The image was for that request. It never goes in the record.
     assert 'image-data' not in str(kernel_store.log_all(row['id']))
+
+
+@pytest.mark.parametrize('args', [{'action': 'click', 'ref': 4}, {'action': 'type', 'ref': 2, 'text': 'hi'},
+                                  {'action': 'select', 'ref': 7, 'text': 'May'}, {'action': 'click', 'x': 10, 'y': 20}])
+def test_clicking_typing_and_selecting_reach_the_page(isolated, monkeypatch, args):
+    """Their activity line once crashed the call before the browser saw it: every
+    click, type and select failed with "_activity() missing ... 'tool'"."""
+    o = orchestrator.Orchestrator()
+    aid = next(iter(o.agents))
+    acted = []
+
+    async def act(key, action, a):
+        acted.append(action)
+        return 'done'
+
+    monkeypatch.setattr(browser, 'act', act)
+    monkeypatch.setattr(browser, 'page_desc', lambda key: 'the sign-in page')
+    lines = []
+
+    async def activity(a, text, tool, **extra):
+        lines.append((text, tool))
+
+    monkeypatch.setattr(o, '_activity', activity)
+    assert asyncio.run(o._dispatch_tool(aid, '~', 'browser', args)) == 'done'
+    assert acted == [args['action']]
+    assert lines and lines[0][1] == 'web' and 'the sign-in page' in lines[0][0]
