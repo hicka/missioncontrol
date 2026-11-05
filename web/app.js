@@ -2189,7 +2189,8 @@ initSettings();
    Hands-free listens again as soon as the agent has finished. */
 const V = { on: false, phase: "idle", err: "", stream: null, ctx: null, analyser: null,
             rec: null, chunks: [], mime: "", speaking: Promise.resolve(), gen: 0,
-            audio: null, lastId: 0, listenTimer: null, awaitTimer: null, awaitStart: 0 };
+            audio: null, finishAudio: null, abort: null, pending: 0,
+            lastId: 0, listenTimer: null, awaitTimer: null, awaitStart: 0 };
 
 function voiceHandsFree() { return $("#voice-handsfree").checked; }
 
@@ -2215,9 +2216,13 @@ async function voiceOpen() {
   V.on = true; V.err = ""; V.phase = "starting";
   V.lastId = S.msgs.length ? S.msgs[S.msgs.length - 1].id : 0;
   voiceUI();
+  fetch("/api/voice/warmup", { method: "POST" }).catch(() => {});
+  const generation = V.gen;
   try {
-    V.stream = await navigator.mediaDevices.getUserMedia(
+    const stream = await navigator.mediaDevices.getUserMedia(
       { audio: { echoCancellation: true, noiseSuppression: true } });
+    if (!V.on || generation !== V.gen) { stream.getTracks().forEach(t => t.stop()); return; }
+    V.stream = stream;
   } catch (e) {
     V.err = "Microphone unavailable: " + (e.message || e.name || e);
     V.phase = "idle"; voiceUI(); return;
@@ -2233,7 +2238,10 @@ async function voiceOpen() {
 
 function voiceStopAll() {
   V.gen += 1;
+  if (V.abort) { V.abort.abort(); V.abort = null; }
   if (V.audio) { try { V.audio.pause(); } catch {} V.audio = null; }
+  if (V.finishAudio) { V.finishAudio(); V.finishAudio = null; }
+  V.speaking = Promise.resolve(); V.pending = 0;
   if (V.rec && V.rec.state !== "inactive") { V.rec.onstop = null; try { V.rec.stop(); } catch {} }
   V.rec = null;
   clearInterval(V.listenTimer); V.listenTimer = null;
@@ -2273,14 +2281,14 @@ function voiceListen() {
     else { V.phase = "idle"; voiceUI(); }
   };
   rec.start(250);
-  // speech starts above the threshold; ~0.9s of quiet after it ends the take
+  // Keep a short natural pause before handing over the turn.
   V.listenTimer = setInterval(() => {
     if (V.rec !== rec) return;
     const level = voiceLevel();
     $("#voice-orb").style.setProperty("--level", Math.min(1, level * 12).toFixed(2));
     if (level > 0.015) { spoke += 1; quiet = 0; } else if (spoke) { quiet += 1; }
     const age = Date.now() - started;
-    if ((spoke && quiet >= 9) || age > 25000 || (!spoke && age > 15000)) {
+    if ((spoke && quiet >= 6) || age > 25000 || (!spoke && age > 15000)) {
       clearInterval(V.listenTimer); V.listenTimer = null;
       try { rec.stop(); } catch {}
     }
@@ -2288,15 +2296,19 @@ function voiceListen() {
 }
 
 async function voiceUtterance(blob, mime) {
+  const g = V.gen, thread = S.current;
+  const abort = new AbortController(); V.abort = abort;
   V.phase = "thinking"; voiceUI();
   const fd = new FormData();
   fd.append("file", blob, /mp4/.test(mime) ? "voice.m4a" : "voice.webm");
   let text = "";
   try {
-    const d = await (await fetch("/api/transcribe", { method: "POST", body: fd })).json();
+    const d = await (await fetch("/api/transcribe", { method: "POST", body: fd, signal: abort.signal })).json();
+    if (g !== V.gen || !V.on) return;
     if (!d.ok) throw new Error(d.error || "transcription failed");
     text = (d.text || "").trim();
   } catch (e) {
+    if (g !== V.gen || !V.on) return;
     V.err = String(e.message || e); V.phase = "idle"; voiceUI(); return;
   }
   if (!text) {
@@ -2304,9 +2316,14 @@ async function voiceUtterance(blob, mime) {
     return;
   }
   V.lastId = S.msgs.length ? S.msgs[S.msgs.length - 1].id : 0;
-  await fetch("/api/send", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ thread: S.current, text, voice: true }) });
-  voiceAwait();
+  try {
+    const response = await fetch("/api/send", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ thread, text, voice: true }), signal: abort.signal });
+    if (!response.ok) throw new Error("Could not send your message");
+    if (g === V.gen && V.on) voiceAwait();
+  } catch (e) {
+    if (g === V.gen && V.on) { V.err = e.message; V.phase = "idle"; voiceUI(); }
+  }
 }
 
 // wait for the reply to be spoken and the agent to go quiet, then listen again
@@ -2316,7 +2333,7 @@ function voiceAwait() {
   let idleTicks = 0;
   V.awaitTimer = setInterval(() => {
     if (!V.on) { clearInterval(V.awaitTimer); V.awaitTimer = null; return; }
-    if (V.phase === "speaking") { idleTicks = 0; return; }
+    if (V.phase === "speaking" || V.pending) { idleTicks = 0; return; }
     const t = currentThread();
     const idle = !t?.agent || (S.agentState[t.agent] || "idle") === "idle";
     idleTicks = idle ? idleTicks + 1 : 0;
@@ -2337,23 +2354,53 @@ function voiceOnMessage(m) {
 
 function voiceSpeak(text) {
   const g = V.gen;
+  V.pending += 1;
   V.speaking = V.speaking.then(async () => {
     if (g !== V.gen || !V.on) return;
     V.phase = "speaking"; voiceUI();
+    const abort = new AbortController(); V.abort = abort;
+    let playing = Promise.resolve(), playbackError = null;
     try {
-      const d = await (await fetch("/api/tts", { method: "POST",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) })).json();
-      if (d.ok && g === V.gen) {
-        await new Promise((done) => {
-          const a = new Audio(d.url);
-          V.audio = a;
-          a.onended = done; a.onerror = done;
-          a.play().catch(done);
+      const response = await fetch("/api/tts/stream", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }), signal: abort.signal });
+      if (!response.ok || !response.body) throw new Error("Speech unavailable");
+      const reader = response.body.getReader(), decoder = new TextDecoder();
+      let buffer = "";
+      const enqueue = (line) => {
+        if (!line.trim()) return;
+        const d = JSON.parse(line);
+        if (!d.ok) throw new Error(d.error || "Speech unavailable");
+        // Fetch/decode ahead while the preceding sentence plays.
+        const audio = new Audio(d.url); audio.preload = "auto";
+        playing = playing.then(async () => {
+          if (g !== V.gen || !V.on || playbackError) return;
+          await new Promise((resolve) => {
+            const finish = () => { audio.onended = audio.onerror = null; V.finishAudio = null; resolve(); };
+            V.audio = audio; V.finishAudio = finish;
+            audio.onended = finish;
+            audio.onerror = () => { finish(); playbackError = new Error("Audio playback failed"); };
+            audio.play().catch(e => { finish(); playbackError = e; });
+          });
         });
+      };
+      while (g === V.gen && V.on) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        const lines = buffer.split("\n"); buffer = lines.pop();
+        lines.forEach(enqueue);
+        if (done) { enqueue(buffer); break; }
       }
-    } catch {}
-    V.audio = null;
-    if (V.on && g === V.gen) { V.phase = "thinking"; voiceUI(); }
+      await playing;
+      if (playbackError) throw playbackError;
+    } catch (e) {
+      await playing;
+      if (V.on && g === V.gen) V.err = e.message || "Speech unavailable";
+    } finally {
+      if (g === V.gen) {
+        V.audio = null; V.abort = null; V.pending = Math.max(0, V.pending - 1);
+        if (V.on) { V.phase = V.err ? "idle" : "thinking"; voiceUI(); }
+      }
+    }
   });
 }
 
@@ -2389,22 +2436,35 @@ async function renderVoicePane() {
     const sel = $("#voice-id");
     sel.innerHTML = vs.map((v) => `<option value="${esc(v.id)}">${esc(v.name)}</option>`).join("")
       || `<option value="">System voice</option>`;
-    if (s.voice) sel.value = s.voice;
+    if (s.voice && vs.some(v => v.id === s.voice)) sel.value = s.voice;
+    $("#voice-provider").value = s.provider;
+    $("#voice-local-only").checked = s.local_only || ["kokoro", "local"].includes(s.provider);
     $("#voice-speed").value = String(s.speed);
     const p = s.providers || {};
-    $("#voice-stt").textContent = p.whisper ? "Whisper on this Mac, nothing leaves the machine"
-      : p.openai ? "OpenAI Whisper" : "Not available: install faster-whisper in the server's venv";
+    const offline = s.local_only || ["kokoro", "local"].includes(s.provider);
+    $("#voice-stt").textContent = p.whisper
+      ? (offline ? "Local Whisper · cloud fallback disabled" : "Local Whisper · cloud fallback allowed")
+      : offline ? "Local Whisper unavailable · install the voice models" : p.openai ? "OpenAI Whisper" : "No speech recognizer installed";
     setStatus("#voice-status-set", "", "");
   } catch {}
   if (!SET.voiceWired) {
     SET.voiceWired = true;
     $("#voice-save").addEventListener("click", saveVoice);
     $("#voice-preview").addEventListener("click", previewVoice);
+    $("#voice-provider").addEventListener("change", async () => {
+      const provider = $("#voice-provider").value;
+      if (["kokoro", "local"].includes(provider)) $("#voice-local-only").checked = true;
+      else if (["minimax", "openai"].includes(provider)) $("#voice-local-only").checked = false;
+      if (await saveVoice()) await renderVoicePane();
+    });
   }
 }
 
 async function saveVoice() {
-  const body = { voice: $("#voice-id").value, speed: +$("#voice-speed").value };
+  const provider = $("#voice-provider").value;
+  const body = { provider, voice: $("#voice-id").value, speed: +$("#voice-speed").value,
+    local_only: $("#voice-local-only").checked };
+  if (provider === "kokoro" && !/^[ab][fm]_/.test(body.voice)) body.voice = "af_heart";
   const d = await (await fetch("/api/settings/voice", { method: "PUT",
     headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
   setStatus("#voice-status-set", d.ok ? "Saved" : `Error: ${d.error}`, d.ok ? "ok" : "err");

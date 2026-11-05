@@ -67,7 +67,15 @@ struct API: Sendable {
     /// A file for a message, sent as the multipart form `/api/upload` reads. The reply is the
     /// attachment to send along with the message. The file is read here, off the main thread.
     func upload(file: URL) async throws -> JSON {
-        guard let url = URL(string: base + "/api/upload") else { throw APIError(message: "That address is not valid: /api/upload") }
+        try await multipart(file: file, path: "/api/upload").attachment
+    }
+
+    func transcribe(file: URL) async throws -> String {
+        try await multipart(file: file, path: "/api/transcribe").text.str
+    }
+
+    private func multipart(file: URL, path: String) async throws -> JSON {
+        guard let url = URL(string: base + path) else { throw APIError(message: "That address is not valid: \(path)") }
         let info = try file.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
         if info.isDirectory == true { throw APIError(message: "A folder cannot be attached.") }
         if (info.fileSize ?? 0) > 50 * 1024 * 1024 { throw APIError(message: "That file is over the 50 MB limit.") }
@@ -89,7 +97,38 @@ struct API: Sendable {
         if status >= 400 || json["ok"] == .bool(false) {
             throw APIError(message: json["error"].optStr ?? json["detail"].optStr ?? "That file could not be uploaded.")
         }
-        return json.attachment
+        return json
+    }
+
+    /// Download ahead while the consumer plays each completed sentence.
+    func speechChunks(_ text: String) -> AsyncThrowingStream<Data, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    guard let url = URL(string: base + "/api/tts/stream") else { throw APIError(message: "The speech address is invalid.") }
+                    var request = URLRequest(url: url, timeoutInterval: 120)
+                    request.httpMethod = "POST"
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+                    request.httpBody = try JSONSerialization.data(withJSONObject: ["text": text])
+                    let (bytes, response) = try await Self.session.bytes(for: request)
+                    guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError(message: "Speech unavailable. Update the Mission Control server and check Voice settings.") }
+                    for try await line in bytes.lines {
+                        try Task.checkCancellation()
+                        if line.isEmpty { continue }
+                        let reply = JSON(data: Data(line.utf8))
+                        guard reply.ok.flag, reply.url.str.hasPrefix("/uploads/tts/") else {
+                            throw APIError(message: reply.error.optStr ?? "The speech server returned invalid audio.")
+                        }
+                        let audio = try await getRaw(reply.url.str)
+                        try Task.checkCancellation()
+                        continuation.yield(audio.data)
+                    }
+                    continuation.finish()
+                } catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { @Sendable _ in task.cancel() }
+        }
     }
 
     /// For a path segment: a thread id such as `dm:cto`, or a search term.

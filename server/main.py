@@ -97,11 +97,10 @@ async def _describe_media(channel: str, item: dict) -> str:
     if not data:
         return f"[{item['kind']} attached, but it could not be downloaded]"
     if item["kind"] == "audio":
-        transcript = await llm.transcribe_audio(data, item.get("name") or "voice.ogg")
+        transcript = await voice_mod.transcribe(data, item.get("name") or "voice.ogg")
         if transcript:
             return f"[voice note] {transcript}"
-        return ("[voice note attached; transcription needs an OpenAI key in "
-                "Settings for Whisper]")
+        return "[voice note attached; transcription unavailable: check speech settings and local models]"
     import base64
     desc = await llm.describe_image(base64.b64encode(data).decode(),
                                     item.get("mime") or "image/jpeg")
@@ -1617,6 +1616,7 @@ class VoiceBody(BaseModel):
     voice: str | None = None
     speed: float | None = None
     speak_replies: bool | None = None
+    local_only: bool | None = None
 
 
 @app.get("/api/settings/voice")
@@ -1627,7 +1627,7 @@ async def get_voice():
 @app.put("/api/settings/voice")
 async def set_voice(body: VoiceBody):
     values = {k: v for k, v in body.model_dump().items() if v is not None}
-    if "provider" in values and values["provider"] not in ("auto", "minimax", "openai", "local"):
+    if "provider" in values and values["provider"] not in ("auto", "kokoro", "minimax", "openai", "local"):
         return {"ok": False, "error": "unknown provider"}
     if "speed" in values and not (0.5 <= values["speed"] <= 2.0):
         return {"ok": False, "error": "speed must be between 0.5 and 2"}
@@ -1639,6 +1639,11 @@ async def set_voice(body: VoiceBody):
 @app.get("/api/settings/voice/voices")
 async def voice_list():
     return {"voices": await voice_mod.list_voices()}
+
+
+@app.post("/api/voice/warmup")
+async def voice_warmup():
+    return {"ok": await voice_mod.warmup()}
 
 
 class TTSBody(BaseModel):
@@ -1662,9 +1667,29 @@ async def transcribe(file: UploadFile):
     data = await file.read()
     text = await voice_mod.transcribe(data, file.filename or "voice.m4a")
     if text is None:
-        return {"ok": False, "error": "no transcriber: install faster-whisper on the "
-                                      "server or add an OPENAI_API_KEY"}
+        return {"ok": False, "error": "Transcription unavailable. Check speech settings; "
+                                      "install requirements-voice.txt and run scripts/setup_voice.py for local speech."}
     return {"ok": True, "text": text}
+
+
+@app.post("/api/tts/stream")
+async def tts_stream(body: TTSBody, request: Request):
+    """Publish playable sentence chunks as soon as each is ready."""
+    from fastapi.responses import StreamingResponse
+    import json
+
+    async def chunks():
+        for text in voice_mod.speech_chunks(body.text):
+            if await request.is_disconnected():
+                return
+            out = await voice_mod.tts_file(text, body.voice)
+            if out is None:
+                yield json.dumps({"ok": False, "error": "Speech unavailable. Check voice settings and local models."}) + "\n"
+                return
+            yield json.dumps({"ok": True, **out}) + "\n"
+
+    return StreamingResponse(chunks(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 # ── Apple apps: one switch per app, all off until the owner says ────────

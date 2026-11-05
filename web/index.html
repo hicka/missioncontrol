@@ -396,6 +396,19 @@
 
       <div class="set-card" id="voice-card">
         <div class="set-row">
+          <div class="set-row-label">Speech engine</div>
+          <select id="voice-provider" class="set-control">
+            <option value="kokoro">Local neural voice · Kokoro</option>
+            <option value="auto">Automatic</option>
+            <option value="minimax">MiniMax</option>
+            <option value="openai">OpenAI</option>
+            <option value="local">macOS system voice</option>
+          </select>
+        </div>
+        <div class="set-row">
+          <label><input type="checkbox" id="voice-local-only"> Keep speech processing on this machine</label>
+        </div>
+        <div class="set-row">
           <div class="set-row-label">Voice</div>
           <select id="voice-id" class="set-control"></select>
         </div>
@@ -412,7 +425,7 @@
           <div class="set-row-label">Listening</div>
           <div class="set-hint" id="voice-stt" style="margin:0"></div>
         </div>
-        <div class="set-hint">One voice everywhere: voice mode here, spoken replies on the phone, voice notes on iMessage and Telegram. Licensed studio voices through your model provider's key.</div>
+        <div class="set-hint">One voice for conversations and voice notes. Local neural speech uses downloaded models; your microphone is active only while voice mode is open.</div>
         <div class="set-footer">
           <span class="set-status" id="voice-status-set"></span>
           <button class="btn ghost" id="voice-preview">Preview</button>

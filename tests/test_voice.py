@@ -1,5 +1,7 @@
 """The team voice: settings, provider choice, and cached synthesis."""
 import asyncio
+import json
+import pytest
 
 
 def test_settings_defaults_and_roundtrip():
@@ -91,3 +93,68 @@ def test_spoken_message_carries_flag_and_voice_note(tmp_path, monkeypatch):
     asyncio.run(o.user_message(f"dm:{o.lead}", "typed this one"))
     assert "VOICE MODE" not in next_batch()
     db._conn.close()
+
+
+@pytest.mark.parametrize("provider", ["kokoro", "local", "auto"])
+def test_offline_never_falls_back_to_cloud(provider, monkeypatch):
+    import voice
+    import llm
+    monkeypatch.setattr(voice, "settings", lambda: {**voice.DEFAULTS, "provider": provider, "local_only": True})
+    monkeypatch.setattr(voice, "providers", lambda: {"kokoro": False, "local": False, "minimax": True, "openai": True})
+    monkeypatch.setattr(voice, "stt_available", lambda: True)
+    def fail(*args):
+        raise RuntimeError("local model failed")
+    async def cloud(*args):
+        pytest.fail("Offline mode contacted cloud speech")
+    monkeypatch.setattr(voice, "_local_transcribe", fail)
+    monkeypatch.setattr(voice, "_minimax", cloud)
+    monkeypatch.setattr(voice, "_openai", cloud)
+    monkeypatch.setattr(llm, "transcribe_audio", cloud)
+    assert asyncio.run(voice.synth("Stay here.")) is None
+    assert asyncio.run(voice.transcribe(b"audio", "test.wav")) is None
+
+
+def test_kokoro_wav_cache_and_offline_cache_separation(tmp_path, monkeypatch):
+    import voice
+    configuration = {**voice.DEFAULTS, "provider": "kokoro"}
+    monkeypatch.setattr(voice, "settings", lambda: configuration)
+    monkeypatch.setattr(voice, "TTS_DIR", tmp_path)
+    async def synth(*args):
+        return b"RIFFtest", "audio/wav"
+    monkeypatch.setattr(voice, "synth", synth)
+    first = asyncio.run(voice.tts_file("Hello."))
+    assert first["mime"] == "audio/wav" and first["url"].endswith(".wav")
+    assert asyncio.run(voice.tts_file("Hello."))["cached"]
+    configuration.update(provider="auto", local_only=False)
+    cloud_allowed = asyncio.run(voice.tts_file("Hello."))
+    configuration["local_only"] = True
+    assert asyncio.run(voice.tts_file("Hello."))["url"] != cloud_allowed["url"]
+
+
+def test_chunks_preserve_words_and_bound_first_audio():
+    import voice
+    text = "Hello there. " + "Let's work through this together, one step at a time. " * 12
+    parts = voice.speech_chunks(text)
+    assert " ".join(parts) == text.strip()
+    assert len(parts) > 1 and all(0 < len(p) <= 140 for p in parts)
+    assert voice.speech_chunks("  ") == []
+    assert all(len(p) <= 140 for p in voice.speech_chunks("x" * 400))
+
+
+def test_stream_endpoint_yields_playable_chunks_and_reports_failure(monkeypatch):
+    import main
+    import voice
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(main, "_api_token", lambda: "voice-test")
+    calls = []
+    async def synth(text, selected=None):
+        calls.append(text)
+        return {"url": "/uploads/tts/test.wav", "mime": "audio/wav", "cached": False} if len(calls) == 1 else None
+    monkeypatch.setattr(voice, "tts_file", synth)
+    client = TestClient(main.app, headers={"Authorization": "Bearer voice-test"})
+    response = client.post("/api/tts/stream", json={"text": "A helpful spoken sentence. " * 15})
+    records = [json.loads(line) for line in response.text.splitlines()]
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    assert records[0]["url"].endswith(".wav") and records[0]["ok"]
+    assert not records[1]["ok"] and len(calls) == 2

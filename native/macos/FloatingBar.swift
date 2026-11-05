@@ -262,6 +262,12 @@ final class BarController: NSObject, NSWindowDelegate {
         store.onMessage = { [weak self] message in self?.received(message) }
         store.onDelta = { [weak self] in self?.aura.token() }
         bar.voice.onFinish = { [weak self] text in self?.heard(text) }
+        bar.voice.api = { [weak self] in self?.store.api }
+        bar.voice.onStart = { [weak self] in
+            self?.bar.answerAloud = false
+            self?.bar.speaker.stop()
+        }
+        bar.speaker.onError = { [weak self] text in self?.store.notify(text, error: true) }
         NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.occlusionChanged() }
         }
@@ -295,7 +301,7 @@ final class BarController: NSObject, NSWindowDelegate {
                 heldToTalk = true
                 haptic()
                 if !panel.isVisible { show() }
-                bar.voice.start()
+                bar.voice.start(pushToTalk: true)
             }
         } else {
             holdTimer?.cancel()
@@ -326,10 +332,13 @@ final class BarController: NSObject, NSWindowDelegate {
     }
 
     func close() {
+        holdTimer?.cancel(); heldToTalk = false
+        bar.voice.cancel()
+        bar.speaker.stop()
+        bar.answerAloud = false
         guard bar.mode == .open else { return }
         bar.reviewing = nil
         bar.focusField = false
-        if bar.voice.listening { bar.voice.cancel() }
         withAnimation(.easeOut(duration: 0.09)) { bar.contentShown = false }
         aura.keepLively = false
         Task {
@@ -340,12 +349,15 @@ final class BarController: NSObject, NSWindowDelegate {
             // A key panel that only resigns keeps the keyboard; ordering it out and back
             // returns it to the app the owner was in.
             panel.orderOut(nil)
-            panel.orderFrontRegardless()
+            if !UserDefaults.standard.bool(forKey: "barHidden") { panel.orderFrontRegardless() }
         }
     }
 
     private func escape() {
-        if bar.reviewing != nil { bar.reviewing = nil } else if bar.voice.listening { bar.voice.cancel() } else { close() }
+        if bar.reviewing != nil { bar.reviewing = nil }
+        else if bar.voice.busy { bar.voice.cancel() }
+        else if bar.speaker.speaking { bar.speaker.stop(); bar.answerAloud = false }
+        else { close() }
     }
 
     private func haptic() { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
@@ -360,8 +372,14 @@ final class BarController: NSObject, NSWindowDelegate {
     }
 
     private func received(_ message: Message) {
-        guard message.thread == store.leadThread, message.sender != "user", message.kind == "chat" else { return }
-        if bar.answerAloud, let api = store.api { bar.speaker.speak(message.text, api: api) }
+        guard message.thread == store.leadThread, message.kind == "chat" else { return }
+        if message.sender == "user" {
+            if !message.meta.voice.flag { bar.answerAloud = false; bar.speaker.stop() }
+            return
+        }
+        if bar.answerAloud, !message.meta.silent.flag, panel.isVisible, let api = store.api {
+            bar.speaker.speak(message.text, api: api)
+        }
         guard bar.mode == .rest, panel.isVisible else { return }
         if let current = bar.peek, current.sender == message.sender { bar.peek?.text = current.text + "\n\n" + message.text }
         else {
@@ -419,7 +437,9 @@ final class BarController: NSObject, NSWindowDelegate {
     /// arrive through store.onDelta the moment they do.
     private func syncFromStore() {
         var status = store.barStatus
-        if bar.voice.listening { status.pulse = .listening } else if bar.speaker.speaking { status.pulse = .speaking }
+        if bar.voice.listening { status.pulse = .listening }
+        else if bar.voice.preparing || bar.voice.transcribing { status.pulse = .thinking }
+        else if bar.speaker.speaking { status.pulse = .speaking }
         aura.pulseState = status.pulse
         if status.pulse != lastPulse {
             if status.pulse == .attention { aura.nudge(); aura.ripple(SIMD3(1, 0.7, 0.25)); haptic() }
@@ -559,8 +579,12 @@ struct BarRoot: View {
     }
 
     private var status: BarStatus {
+        if bar.voice.preparing { return BarStatus(pulse: .listening, title: "Starting microphone…") }
+        if bar.voice.transcribing { return BarStatus(pulse: .thinking, title: "Transcribing…") }
         if bar.voice.listening { return BarStatus(pulse: .listening, title: bar.voice.transcript.isEmpty ? "Listening…" : "", detail: bar.voice.transcript) }
         if bar.speaker.speaking { return BarStatus(pulse: .speaking, title: "Speaking…") }
+        if !bar.voice.error.isEmpty { return BarStatus(pulse: .attention, title: "Microphone", detail: bar.voice.error) }
+        if !bar.speaker.error.isEmpty { return BarStatus(pulse: .attention, title: "Speech", detail: bar.speaker.error) }
         return store.barStatus
     }
 }
@@ -748,9 +772,12 @@ private struct OpenBar: View {
                     .foregroundStyle(bar.voice.listening ? .white : .white.opacity(0.6))
                     .symbolEffect(.variableColor.iterative, isActive: bar.voice.listening)
             }
-            .buttonStyle(.plain).help(bar.voice.listening ? "Stop listening" : "Speak (or hold ⌥Space)").accessibilityLabel(bar.voice.listening ? "Stop listening" : "Speak")
-            if let lead = store.lead, bar.draft.isEmpty, store.isBusy(lead.id) {
-                Button { Task { await store.stopAgent(lead.id) } } label: {
+            .buttonStyle(.plain).help(bar.voice.busy ? "Finish or cancel speech input" : "Speak (or hold ⌥Space)").accessibilityLabel(bar.voice.busy ? "Stop listening" : "Speak")
+            if bar.speaker.speaking || (bar.draft.isEmpty && store.lead.map { store.isBusy($0.id) } == true) {
+                Button {
+                    bar.speaker.stop(); bar.voice.cancel(); bar.answerAloud = false
+                    if let lead = store.lead, store.isBusy(lead.id) { Task { await store.stopAgent(lead.id) } }
+                } label: {
                     Image(systemName: "stop.circle.fill").font(.system(size: 24)).foregroundStyle(.white.opacity(0.75))
                 }.buttonStyle(.plain).help("Stop").accessibilityLabel("Stop")
             } else {
@@ -768,6 +795,7 @@ private struct OpenBar: View {
         guard !text.isEmpty, let thread = store.leadThread else { return }
         bar.draft = ""
         bar.answerAloud = false
+        bar.voice.cancel(); bar.speaker.stop()
         Task { await store.send(text, to: thread) }
     }
 }

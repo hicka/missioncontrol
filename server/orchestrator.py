@@ -2697,8 +2697,9 @@ class Orchestrator:
                 {"type": "image", "source": {"type": "base64", "media_type": mime if mime.startswith("image/") else "image/jpeg",
                                              "data": base64.b64encode(data).decode()}}])
         if row["kind"] == "audio":
-            transcript = await llm.transcribe_audio(data, name)
-            return f"{text}\n[voice note] " + (transcript or "could not be transcribed (Whisper needs an OpenAI key in Settings)")
+            import voice
+            transcript = await voice.transcribe(data, name)
+            return f"{text}\n[voice note] " + (transcript or "could not be transcribed (check speech settings and local models)")
         if mime == "application/pdf":
             import uploads
             path = wa._media_path(row["file"])
