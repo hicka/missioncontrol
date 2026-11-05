@@ -1800,8 +1800,7 @@ class Orchestrator:
             elif action in ("click", "type", "select"):
                 await self._activity(aid,
                                  f"web: {action} " + (f"[{args['ref']}]" if args.get('ref') is not None else f"({args.get('x')}, {args.get('y')})") + " on " +
-                                 f"{browser_mod.page_desc(key)}",
-                                 kind="tool", meta={"tool": "web"})
+                                 f"{browser_mod.page_desc(key)}", "web")
             elif action in ('screenshot', 'screencapture', 'read', 'use_tab'):
                 await self._activity(aid, f"web: {action} on {browser_mod.page_desc(key)}", "web")
             return await browser_mod.act(key, action, args)
