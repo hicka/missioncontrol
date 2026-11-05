@@ -10,6 +10,10 @@ import tools
 
 HOME = str(Path.home())
 REPO = tools.SELF_REPO
+# The checkout as a person types it. Wherever the suite runs from: the improve
+# tool runs it in a worktree under /tmp, and a fixed ~/missioncontrol failed every
+# proposal there, since that worktree is not the checkout it names.
+TYPED = "~" + REPO[len(HOME):] if REPO.startswith(HOME + "/") else REPO
 
 
 def _blocked(cmd, wd=REPO):
@@ -23,7 +27,7 @@ def test_the_exact_bypass_that_happened():
 
 def test_git_writes_are_caught_however_the_path_is_given():
     """`git -C <path> commit` puts flags between git and the verb."""
-    for cmd in ("git -C ~/missioncontrol commit -am wip",
+    for cmd in (f"git -C {TYPED} commit -am wip",
                 f"git -C {REPO} push origin master",
                 f"cd {REPO} && git reset --hard HEAD~1",
                 f"cd {REPO} && git rebase master",
