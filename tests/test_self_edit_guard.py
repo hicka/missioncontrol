@@ -73,6 +73,27 @@ def test_other_repos_are_none_of_this_guard_s_business():
         assert _blocked(cmd, wd) is None, cmd
 
 
+def test_repositories_that_only_share_its_name_are_ordinary_work(tmp_path):
+    """A team keeping the phone app at ~/missioncontrol-mobile, or a clone of this
+    repository somewhere else, was refused as if it were editing the running app."""
+    name = Path(REPO).name
+    for cmd, wd in ((f"git -C {REPO}-mobile commit -am fix", HOME),
+                    (f"cd {TYPED}-mobile && git checkout -b crew/fix", HOME),
+                    ("git commit -am fix", REPO + "-mobile"),
+                    (f"git -C {tmp_path}/{name} push -u origin crew/fix", HOME),
+                    (f"cd {tmp_path}/{name} && touch notes.md", HOME),
+                    (f"git clone https://github.com/acme/{name} {tmp_path}/copy", HOME)):
+        assert _blocked(cmd, wd) is None, cmd
+
+
+def test_its_bare_name_from_home_is_still_the_checkout():
+    if not REPO.startswith(HOME + "/"):
+        return
+    rel = REPO[len(HOME) + 1:]
+    assert _blocked(f"cd {rel} && git commit -am x", HOME)
+    assert _blocked(f"cd $HOME/{rel} && git commit -am x", HOME)
+
+
 def test_the_refusal_points_at_the_supported_path():
     msg = _blocked(f"cd {REPO} && git commit -am x")
     assert "improve tool" in msg

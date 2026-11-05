@@ -1083,7 +1083,12 @@ class Router(sess.Session):
             return f"error: not a file from a report: {', '.join(disallowed)}"
         sent = await self.orch.deliver(thread_id, self._guarded(text), sender=self.profile, files=files)
         # It answers whoever is on that conversation, and nobody else who happens to be waiting.
-        await self._answered([t["id"] for t in self.unanswered if self._speakable(t["thread"]) == thread_id], replied=True)
+        # Said down a phone channel it is in the app's chat as well, so whoever wrote there
+        # has it too. Counting them as still waiting sent the same news to the app twice.
+        reached = {thread_id}
+        if ((thread or {}).get("address") or {}).get("channel"):
+            reached.add(self._conversation_of(thread_id))
+        await self._answered([t["id"] for t in self.unanswered if self._speakable(t["thread"]) in reached], replied=True)
         if sent.get("sent") is False:
             return (f"posted in the app, but {sent.get('channel')} did not take it: {sent.get('error')}. It will be "
                     "retried. Do not tell them it reached their phone. Reply NO_REPLY unless there is more to do.")

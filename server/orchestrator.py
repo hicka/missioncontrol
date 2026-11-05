@@ -798,9 +798,16 @@ class Orchestrator:
     def update_agent(self, aid: str, fields: dict) -> dict:
         if aid not in self.agents:
             raise ValueError(f"no agent '{aid}'")
-        allowed = {"name", "prompt", "color", "cwd", "blurb", "llm", "tools", "skills", "max_tool_rounds", "max_tool_calls"}
+        allowed = {"name", "prompt", "color", "cwd", "blurb", "llm", "tools", "skills", "max_tool_rounds", "max_tool_calls",
+                   "own_repos"}
         changes = {k: v for k, v in fields.items() if k in allowed and
                    (v is not None or k in ("tools", "skills"))}
+        if "own_repos" in changes:
+            repos = changes["own_repos"]
+            if not isinstance(repos, list) or any(not isinstance(r, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", r.strip())
+                                                  for r in repos):
+                raise ValueError("repositories it runs on its own are written owner/name")
+            changes["own_repos"] = list(dict.fromkeys(r.strip() for r in repos))
         if "llm" in changes:
             # an empty override means "back to the team default", stored as {}
             # rather than a half-filled dict that would half-apply
@@ -2162,9 +2169,15 @@ class Orchestrator:
             workdir = os.path.expanduser(args.get("cwd") or agent_cwd)
             import github
             as_bot = aid == github.review_agent()
+            # A repository the owner gave this profile is its to run: there it pushes,
+            # opens, reviews and merges pull requests and talks on issues unasked. Never
+            # for work an outsider's event started, which has nobody's say behind it.
+            own_repos = self.agents.get(aid, {}).get("own_repos") or []
+            own = (bool(own_repos) and outward and strength in ("explicit", "standing")
+                   and await asyncio.to_thread(github.own_repo_work, cmd, workdir, own_repos))
             # One account speaks for the agents on GitHub: the reviewer's own. Letting
             # everyone post through it would be a team speaking in one voice nobody chose.
-            if github.review_agent() and not as_bot and ledger.posts_on_github(cmd):
+            if github.review_agent() and not as_bot and not own and ledger.posts_on_github(cmd):
                 speaker = self.agents.get(github.review_agent(), {}).get("name", github.review_agent())
                 return (f"refused: only {speaker} posts on GitHub, through its own account. Do not post this "
                         "another way. Report handback with the thread and the exact text to post.")
@@ -2172,7 +2185,7 @@ class Orchestrator:
             # own account, which cannot merge, change settings or run PR code. That
             # account is the limit here, so it needs no second approval from the owner.
             by_bot = as_bot and bool(github.bot_token()) and ledger.only_github_writes(cmd)
-            held_outward = outward and not by_bot
+            held_outward = outward and not by_bot and not own
             # Only someone the owner actually asked gets near their credentials. A job
             # or a pulse has its own instructions and no reason to go looking for keys.
             secrets_held = ledger.touches_secrets(cmd) and strength in ("inferred", "standing")
@@ -2183,7 +2196,8 @@ class Orchestrator:
             if held_outward and strength in ("inferred", "standing") and await self._pushing_own_pr(ctx, cmd, workdir):
                 held_outward = False
             # What only the owner's login may do is never anyone else's to decide unasked.
-            owners_alone = strength in ("inferred", "standing") and ledger.needs_owner_login(cmd) and not as_bot
+            owners_alone = (strength in ("inferred", "standing") and ledger.needs_owner_login(cmd) and not as_bot
+                            and not own)
             if secrets_held or owners_alone or (strength in ("inferred", "standing") and held_outward) or (
                     inferred and ledger.reaches_network(cmd)):
                 waiting = await asyncio.to_thread(runtime_store.approval_pending_like, aid, cmd)
@@ -2220,7 +2234,7 @@ class Orchestrator:
             # The reviewer is always on its own account, whatever a comment's text mentions.
             out = await tools.run_terminal(cmd, args.get("cwd"), agent_cwd,
                                            env_extra=github.agent_env("" if as_bot else cmd), as_bot=as_bot, agent=aid,
-                                           intent=await self._owner_intent(aid),
+                                           intent=github.own_repo_intent(own_repos) if own else await self._owner_intent(aid),
                                            timeout=tools.JOB_TIMEOUT if key != aid else tools.TERMINAL_TIMEOUT,
                                            keys=not inferred)
             if action_id is not None:

@@ -665,6 +665,7 @@ function openEditModal(aid) {
   $("#na-calls").value = a.max_tool_calls || 160;
   $("#na-tools").value = a.tools === null || a.tools === undefined ? "" : a.tools.join(", ") || "none";
   $("#na-skills").value = a.skills === null || a.skills === undefined ? "" : a.skills.join(", ") || "none";
+  $("#na-own").value = (a.own_repos || []).join(", ");
   $("#modal-backdrop").classList.remove("hidden");
   $("#new-agent-modal h2").textContent = "Edit profile";
   $("#na-create").textContent = "Save";
@@ -758,6 +759,7 @@ async function submitModal() {
       };
       payload.tools = allowlist("#na-tools");
       payload.skills = allowlist("#na-skills");
+      payload.own_repos = $("#na-own").value.split(",").map(s => s.trim()).filter(Boolean);
       payload.max_tool_rounds = Number($("#na-rounds").value);
       payload.max_tool_calls = Number($("#na-calls").value);
       res = await fetch(`/api/agents/${aid}`, {
