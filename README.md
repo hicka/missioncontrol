@@ -69,6 +69,10 @@ the address and port.
   passwords stay in your OS vault, research with citations, your Mac's Notes, Calendar,
   Reminders, Mail and Messages (each off until you connect it, and it can never send
   mail), MCP servers, and Claude Code when a task needs software written.
+- **Builds its own add-ons.** Ask for anything that should keep going on its own or
+  sit on your desktop, and an agent writes a [module](docs/modules.md) for it: tools,
+  timers and live cards drawn natively on your Mac's desktop. Each runs in its own
+  sandboxed process with only the network, keys and files it was given.
 - **Learns from mistakes.** Skills are procedures it saves and reuses. Your corrections
   and its own repeated failures become lessons, which start on trial and are kept only
   if the mistake stops happening. A lesson is only text in a prompt: it cannot grant a
@@ -84,12 +88,13 @@ the address and port.
 | Page | What it is for |
 | --- | --- |
 | **Home** | Hand over a task and see what needs you and what is in progress |
-| **Inbox** | Everything waiting on you: held commands, questions, jobs, proposed changes, sign-ins, lessons |
+| **Inbox** | Everything waiting on you: held commands, questions, jobs, modules, proposed changes, sign-ins, lessons |
 | **Tasks** | Every objective, who is on it and where it stands |
 | **Activity** | What reached the agent, what became of it, its rules, and the watchdog |
 | **Schedule** | Recurring jobs, and watches following something in flight |
 | **Knowledge** | Shared memory, saved skills and website playbooks |
 | **Evolution** | The share of clean runs over time, and the lessons behind it |
+| **Modules** | Add-ons the agents built: their cards, tools, permissions, code and log |
 
 The top chat is the agent. Writing to a profile by name below it is a direct line,
 with no Router in between, which is how you step in. Press **Cmd+K** or **Ctrl+K** to
@@ -195,6 +200,7 @@ build yet, so you build and sign your own.
 | --- | --- |
 | `server/` | The FastAPI backend: kernel, model layer, channels, scheduler and tools |
 | `server/router.py`, `workers.py`, `triggers.py`, `watchdog.py` | The heart of the kernel ([design](docs/super-agent.md)) |
+| `server/modules.py`, `module_host.py`, `module_ui.py` | Modules: agent-built add-ons and their sandbox ([design](docs/modules.md)) |
 | `web/` | The workspace UI for browsers and remote access, with no build step |
 | `native/macos/`, `packaging/` | The native macOS app and installers |
 | `bin/` | `mc`, the outside watchdog, and small CLIs for Envoyer, Forge and Meta |

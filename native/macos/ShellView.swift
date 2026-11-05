@@ -43,6 +43,7 @@ struct ShellView: View {
         case .schedule: ScheduleView()
         case .knowledge: KnowledgeView()
         case .evolution: EvolutionView()
+        case .modules: ModulesView()
         case .runtime: RuntimeView(model: runtime)
         case .chat(let id): ChatView(threadID: id).id(id)
         case .settings(let tab): SettingsView(initialTab: tab)
@@ -64,6 +65,8 @@ private struct Sidebar: View {
                 row("Schedule", "clock", .schedule, badge: store.activeWatchCount)
                 row("Knowledge", "book", .knowledge)
                 row("Evolution", "chart.line.uptrend.xyaxis", .evolution, badge: store.evolution.trial.int)
+                row("Modules", "puzzlepiece.extension", .modules,
+                    badge: store.modules.filter { ["failed", "pending"].contains($0.status.str) }.count, tone: MC.warn)
             }
             Section("Chats") {
                 ForEach(store.threadRows) { thread in ThreadRow(thread: thread).tag(Route.chat(thread.id)) }

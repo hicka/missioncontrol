@@ -7,6 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let store = Store()
     let updates = Updates()
     var bar: BarController!
+    var cards: DesktopCards!
+    var cardsItem: NSMenuItem!
     var window: NSWindow!
     var statusItem: NSStatusItem!
     var runtimeItem: NSMenuItem!
@@ -21,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         AppTheme.apply()
         buildMenus(); buildWindow(); buildStatusItem()
         bar = BarController(store: store)
+        cards = DesktopCards(store: store)
+        cardsItem?.title = cards.hidden ? "Show Desktop Cards" : "Hide Desktop Cards"
         bar.bar.voice.onError = { [weak self] text in self?.store.notify(text, error: true) }
         store.onShowWindow = { [weak self] in self?.showWindow() }
         model.onReady = { [weak self] url, token in self?.store.connect(API(base: url.absoluteString, token: token)) }
@@ -62,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         for (title, action, key) in [("Undo", Selector(("undo:")), "z"), ("Redo", Selector(("redo:")), "Z"), ("Cut", #selector(NSText.cut(_:)), "x"), ("Copy", #selector(NSText.copy(_:)), "c"), ("Paste", #selector(NSText.paste(_:)), "v"), ("Select All", #selector(NSText.selectAll(_:)), "a")] { edit.addItem(withTitle: title, action: action, keyEquivalent: key) }
         editItem.submenu = edit; main.addItem(editItem)
         let view = NSMenu(title: "View"), viewItem = NSMenuItem()
-        for (index, entry) in [("Home", Route.home), ("Inbox", .inbox), ("Tasks", .tasks), ("Activity", .activity), ("Schedule", .schedule), ("Knowledge", .knowledge), ("Evolution", .evolution)].enumerated() {
+        for (index, entry) in [("Home", Route.home), ("Inbox", .inbox), ("Tasks", .tasks), ("Activity", .activity), ("Schedule", .schedule), ("Knowledge", .knowledge), ("Evolution", .evolution), ("Modules", .modules)].enumerated() {
             let menuItem = item(entry.0, #selector(routeAction(_:)), "\(index + 1)")
             menuItem.representedObject = entry.1
             view.addItem(menuItem)
@@ -70,6 +74,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         view.addItem(.separator())
         view.addItem(item("Search and Commands…", #selector(paletteAction), "k"))
         view.addItem(item("Show Floating Bar", #selector(barAction), "b"))
+        cardsItem = item("Hide Desktop Cards", #selector(cardsAction))
+        view.addItem(cardsItem)
         viewItem.submenu = view; main.addItem(viewItem)
         let windows = NSMenu(title: "Window"), windowItem = NSMenuItem()
         windows.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
@@ -140,6 +146,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showWindow()
     }
     @objc func barAction() { bar.toggleVisible(); updateStatus() }
+    @objc func cardsAction() {
+        cards.hidden.toggle()
+        cardsItem.title = cards.hidden ? "Show Desktop Cards" : "Hide Desktop Cards"
+    }
     @objc func updatesAction() { if updates.available { updates.checkNow() } else { store.go(.settings("updates")) } }
     @objc func startAction() { model.crashCount = 0; model.start() }
     @objc func stopAction() { model.stop() }

@@ -18,6 +18,10 @@ def check_port(port):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--module-host":
+        # A frozen app has no separate Python, so a module's process is this one.
+        import module_host
+        return module_host.main(sys.argv[2:])
     parser = argparse.ArgumentParser()
     parser.add_argument("--inventory", action="store_true")
     parser.add_argument("--cleanup-owned", action="store_true")

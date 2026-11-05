@@ -25,7 +25,7 @@ struct StreamText: Equatable { var agent: String; var thread: String; var text =
 
 /// Where the main window is looking.
 enum Route: Hashable {
-    case home, inbox, tasks, activity, schedule, knowledge, evolution, runtime
+    case home, inbox, tasks, activity, schedule, knowledge, evolution, modules, runtime
     case chat(String)
     case settings(String)
 }
@@ -158,6 +158,11 @@ final class Store {
     var workers: [JSON] = []
     var agentInfo: JSON = .null
 
+    /// Add-ons the agents built, and the cards they draw, which the desktop shows.
+    var modules: [JSON] = []
+    var moduleCards: [JSON] = []
+    var modulesSandboxed = true
+
     /// Held commands the conversation draws as cards, by id, as the server last said.
     var approvalCards: [String: JSON] = [:]
 
@@ -215,6 +220,7 @@ final class Store {
         Task {
             await refreshState()
             await refresh()
+            await loadModules()
             for model in threadCache.values where model.loaded && model.atLatest { if let api { await model.load(api) } }
         }
     }
@@ -362,6 +368,19 @@ final class Store {
             Task { for id in shown { await loadApproval(id) } }
         case "watch_updated", "cron_updated":
             refreshSoon()
+        case "modules_updated", "module_cards":
+            Task { await loadModules() }
+        case "module_card":
+            if event.removed.flag {
+                moduleCards.removeAll { $0.module.str == event.module.str && $0.id == event["id"].str }
+            } else if !event.card.isNull {
+                let card = event.card
+                if let index = moduleCards.firstIndex(where: { $0.module.str == card.module.str && $0.id == card.id }) {
+                    if moduleCards[index] != card { moduleCards[index] = card }
+                } else {
+                    moduleCards.append(card)
+                }
+            }
         default:
             break
         }
@@ -443,6 +462,46 @@ final class Store {
         guard let api, let reply = try? await api.get("/api/approvals/\(API.escape(id))"), !reply.approval.isNull else { return false }
         if approvalCards[id] != reply.approval { approvalCards[id] = reply.approval }
         return true
+    }
+
+    // MARK: Modules
+
+    func loadModules() async {
+        guard let api, let reply = try? await api.get("/api/modules") else { return }
+        let rows = reply.modules.list, cards = reply.cards.list
+        if rows != modules { modules = rows }
+        if cards != moduleCards { moduleCards = cards }
+        modulesSandboxed = reply.sandboxed.flag
+    }
+
+    /// The owner's own controls. Approving sends back the version that was shown, and the
+    /// server refuses it if the code has changed since.
+    func moduleAction(_ slug: String, _ action: String, version: String = "") async throws {
+        guard let api, live else { throw APIError(message: "Still reading the current state. Try again in a moment.") }
+        _ = try await api.post("/api/modules/\(API.escape(slug))/\(action)", version.isEmpty ? [:] : ["version": version])
+        await loadModules()
+        refreshSoon(after: 0.05)
+    }
+
+    /// A button, toggle or field on a module's card.
+    func cardAction(_ card: JSON, _ event: CardEvent) async {
+        guard let api else { notify("Not connected to the runtime yet.", error: true); return }
+        do {
+            _ = try await api.post("/api/modules/\(API.escape(card.module.str))/cards/\(API.escape(card.id))/action",
+                                   ["action": event.action, "value": event.value.raw, "values": event.values.mapValues(\.raw)])
+        } catch { notify(error.localizedDescription, error: true) }
+    }
+
+    func setCardDesktop(_ card: JSON, _ desktop: Bool) async {
+        guard let api else { return }
+        do {
+            _ = try await api.put("/api/modules/\(API.escape(card.module.str))/cards/\(API.escape(card.id))", ["desktop": desktop])
+            if let index = moduleCards.firstIndex(where: { $0.module.str == card.module.str && $0.id == card.id }),
+               case .object(var row) = moduleCards[index] {
+                row["desktop"] = .bool(desktop)
+                moduleCards[index] = .object(row)
+            }
+        } catch { notify(error.localizedDescription, error: true) }
     }
 
     func notify(_ text: String, error: Bool = false) {

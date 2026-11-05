@@ -64,6 +64,7 @@ private func kindInfo(_ kind: String) -> KindInfo {
     case "signin": return KindInfo(icon: "globe", tone: MC.warn, label: "Website sign-in")
     case "lesson": return KindInfo(icon: "flask", tone: MC.warn, label: "Lesson needs a decision")
     case "question": return KindInfo(icon: "questionmark.bubble", tone: MC.warn, label: "A worker needs your answer")
+    case "module": return KindInfo(icon: "puzzlepiece.extension", tone: MC.info, label: "Module waiting to run")
     default: return KindInfo(icon: "tray", tone: .secondary, label: kind)
     }
 }
@@ -138,6 +139,7 @@ private struct InboxRow: View {
         case "tool": ToolItem(item: item, who: who)
         case "job": JobItem(item: item, who: who)
         case "proposal": ProposalItem(item: item, who: who)
+        case "module": ModuleItem(item: item, who: who)
         case "question": QuestionItem(item: item, who: who)
         case "signin": SigninItem(item: item, who: who)
         case "lesson": LessonItem(item: item, who: who)
@@ -403,6 +405,36 @@ private struct JobItem: View {
     private func act(_ action: String) async throws {
         _ = try await liveAPI(store).post("/api/cron/\(API.escape(item.id))/\(action)")
         store.refreshSoon(after: 0.05)
+    }
+}
+
+private struct ModuleItem: View {
+    @Environment(Store.self) private var store
+    let item: JSON
+    let who: String
+    @State private var showingCode = false
+
+    var body: some View {
+        let files = item.files.list
+        ItemTitle(text: item.title.str)
+        Explanation(who: who, text: " · \(plural(files.count, "file")) · version \(item.version.str) · waiting because \(item.reason.str)")
+        if !item.detail.str.isEmpty {
+            Text(verbatim: item.detail.str)
+                .font(.system(size: 12.5))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        ModulePermissions(permissions: item.permissions)
+        HStack(spacing: 8) {
+            Button("View code") { showingCode = true }
+            Decisions(choices: [
+                Choice(title: "Approve and run", primary: true) {
+                    try await store.moduleAction(item.id, "approve", version: item["hash"].str)
+                },
+                Choice(title: "Decline") { try await store.moduleAction(item.id, "decline") },
+            ])
+        }
+        .sheet(isPresented: $showingCode) { ModuleCodeSheet(slug: item.id, approving: true) }
     }
 }
 
