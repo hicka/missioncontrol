@@ -201,7 +201,7 @@ SPECULATIVE_NOTE = (
 INFERRED_DENIED = frozenset({
     "claude_code", "improve", "voice_reply", "cron",
     "browser", "apple", "whatsapp", "mail_cleanup", "mcp", "research", "generate_image", "decide",
-    "remember", "forget", "save_skill", "save_playbook",
+    "remember", "forget", "save_skill", "save_playbook", "module",
 })
 
 

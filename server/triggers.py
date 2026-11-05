@@ -39,7 +39,7 @@ ADMISSIONS = (EXPLICIT, CANDIDATE, IGNORE)
 # the owner, so each can start a Worker. Anything else raised for nobody in particular
 # goes to the Router. A notice with no session behind it once started a Worker with no
 # context, which found itself something to do: it approved a PR nobody had asked about.
-STANDING_SOURCES = {"cron", "heartbeat", "brief"}
+STANDING_SOURCES = {"cron", "heartbeat", "brief", "module"}
 
 # Channels only ever deliver allow-listed senders, so a message on one is the
 # owner asking. Everything arriving from the outside world starts as a candidate.

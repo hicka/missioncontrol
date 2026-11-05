@@ -22,6 +22,7 @@ import llm
 import settings as cfg
 import sync as sync_mod
 import watch as watch_mod
+import modules as modules_mod
 import orchestrator as orch_mod
 import voice as voice_mod
 import budget as budget_mod
@@ -329,6 +330,10 @@ def configure_runtime():
                 "and only while nothing is running.",
                 run=lambda: selfupdate.loop(orch, broadcast), dependencies=("agents",),
                 group="harness", settings_tab="improve")
+    modules_mod.orch, modules_mod.emit = orch, broadcast
+    manager.add("modules", "Modules", "Add-ons the agents built: runs each in its own sandboxed process, "
+                "with the tools and desktop cards it adds.",
+                run=modules_mod.supervise, dependencies=("agents",), group="harness")
     manager.add("scheduler", "Scheduled jobs", "Runs owner-approved jobs and monitor checks.",
                 run=lambda: cron_mod.scheduler(orch, broadcast), dependencies=("agents",), settings_tab="jobs")
     manager.add("heartbeat", "Heartbeat", "Periodic checks against your heartbeat checklist.",
@@ -608,6 +613,10 @@ async def _inbox() -> list[dict]:
     for p in proposals:
         items.append({"kind": "proposal", "id": p["id"], "agent": p["agent"], "ts": p["ts"],
                       "title": p["title"], "detail": p["rationale"][:600], "stat": p["stat"]})
+    try:
+        items.extend(await asyncio.to_thread(modules_mod.pending))
+    except Exception:
+        logger.exception("could not read modules for the inbox")
     for r in browser_auth.pending():
         items.append({"kind": "signin", "id": r.get("id"), "agent": r.get("agent"),
                       "ts": (r.get("expires") or 0) - browser_auth.WAIT_SECONDS,
@@ -2100,6 +2109,82 @@ async def cron_action(jid: int, action: str):
 async def watches_list(history: bool = False):
     return {"watches": (await asyncio.to_thread(db.list_watches, None if history else "active"))[:200],
             "agents": {aid: a["name"] for aid, a in orch.agents.items()}}
+
+
+@app.get("/api/modules")
+async def modules_list():
+    return await asyncio.to_thread(modules_mod.snapshot)
+
+
+@app.get("/api/modules/{slug}")
+async def module_detail(slug: str):
+    row = await asyncio.to_thread(modules_mod.get, slug)
+    if not row:
+        return JSONResponse({"ok": False, "error": "No such module."}, status_code=404)
+    return {"module": await asyncio.to_thread(modules_mod.describe, row, True)}
+
+
+class ModuleActionBody(BaseModel):
+    version: str = Field(default="", max_length=64)
+
+
+@app.post("/api/modules/{slug}/{action}")
+async def module_action(slug: str, action: str, body: ModuleActionBody | None = None):
+    """The owner's own controls. Approving runs exactly the files the Inbox showed: the app
+    sends back the version it showed, and a different one is refused."""
+    if not await asyncio.to_thread(modules_mod.get, slug):
+        return JSONResponse({"ok": False, "error": "No such module."}, status_code=404)
+    try:
+        if action == "approve":
+            await modules_mod.approve(slug, version=(body.version if body else ""))
+            await broadcast({"type": "approvals_updated"})
+        elif action == "decline":
+            await modules_mod.decline(slug)
+            await broadcast({"type": "approvals_updated"})
+        elif action in ("start", "restart"):
+            row = await asyncio.to_thread(modules_mod.get, slug)
+            if row["status"] == "pending":
+                return JSONResponse({"ok": False, "error": "Approve this version first."}, status_code=409)
+            await asyncio.to_thread(modules_mod._put, slug, enabled=True)
+            await modules_mod.start(slug)
+        elif action == "stop":
+            await modules_mod.stop(slug, status="stopped", reason="stopped by the owner")
+            await asyncio.to_thread(modules_mod._put, slug, enabled=False)
+        elif action == "remove":
+            await modules_mod.remove(slug)
+            await broadcast({"type": "approvals_updated"})
+            return {"ok": True}
+        else:
+            return JSONResponse({"ok": False, "error": "Unknown action."}, status_code=400)
+    except modules_mod.ModuleError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    row = await asyncio.to_thread(modules_mod.get, slug)
+    return {"ok": True, "module": await asyncio.to_thread(modules_mod.describe, row)}
+
+
+class CardActionBody(BaseModel):
+    action: str = Field(min_length=1, max_length=120)
+    value: object = None
+    values: dict = {}
+
+
+@app.post("/api/modules/{slug}/cards/{cid}/action")
+async def module_card_action(slug: str, cid: str, body: CardActionBody):
+    if not await modules_mod.act(slug, cid, body.action, body.value, body.values):
+        return JSONResponse({"ok": False, "error": "That module is not running."}, status_code=409)
+    return {"ok": True}
+
+
+class CardPlaceBody(BaseModel):
+    desktop: bool
+
+
+@app.put("/api/modules/{slug}/cards/{cid}")
+async def module_card_place(slug: str, cid: str, body: CardPlaceBody):
+    card = await modules_mod.set_desktop(slug, cid, body.desktop)
+    if not card:
+        return JSONResponse({"ok": False, "error": "No such card."}, status_code=404)
+    return {"ok": True, "card": card}
 
 
 @app.post("/api/watches/{wid}/cancel")

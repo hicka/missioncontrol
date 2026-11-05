@@ -202,7 +202,7 @@ private struct CommandPalette: View {
         let screens: [(String, String, Route)] = [
             ("Home", "house", .home), ("Inbox", "tray", .inbox), ("Tasks", "checklist", .tasks),
             ("Activity", "bolt", .activity), ("Schedule", "clock", .schedule), ("Knowledge", "book", .knowledge),
-            ("Evolution", "chart.line.uptrend.xyaxis", .evolution),
+            ("Evolution", "chart.line.uptrend.xyaxis", .evolution), ("Modules", "puzzlepiece.extension", .modules),
         ]
         return screens.map { title, icon, route in
             PaletteItem(id: "go:\(title)", group: "Go to", title: title, icon: icon) { store.go(route) }

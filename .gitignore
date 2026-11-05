@@ -44,6 +44,7 @@ build/
 
 # Learned team knowledge (per-install data)
 skills/
+modules/
 uploads/
 whatsapp_media/
 
