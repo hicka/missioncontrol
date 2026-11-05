@@ -379,8 +379,10 @@ def test_a_task_that_reports_ready_stops_its_watches_and_hears_which(isolated, m
         watches = [w for w in db.list_watches() if w["session"] == row["id"]]
         assert len(watches) == 1 and watches[0]["status"] == "cancelled"
         assert watches[0]["last_out"] == "Its task reported ready."
-        told = json.dumps(store.log_all(row["id"], 50))
-        assert "stopped the watches this task still had running: 'ios build'" in told
+        # The Worker hears it as the report tool's answer, which reaches its transcript
+        # just after the report itself.
+        told = "stopped the watches this task still had running: 'ios build'"
+        await until(lambda: told in json.dumps(store.log_all(row["id"], 50)))
         await wind_down(o)
     asyncio.run(main())
 
