@@ -1876,6 +1876,7 @@ class ImproveBody(BaseModel):
     autofix: bool | None = None
     auto_apply: bool | None = None
     push: bool | None = None
+    peer_approve: bool | None = None
 
 
 @app.get("/api/improvements")

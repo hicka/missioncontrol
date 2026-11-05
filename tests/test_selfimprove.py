@@ -243,3 +243,18 @@ def test_current_state_survives_selfimprove_blowing_up(monkeypatch):
     monkeypatch.setattr(si, "readiness", boom)
     block = asyncio.run(o._current_state_block())
     assert block.startswith("CURRENT STATE")
+
+
+def test_the_tool_lets_a_teammate_approve_but_not_the_author(monkeypatch):
+    import db
+    o = _orch()
+    author, other = list(o.agents)[:2]
+    s = {**si.settings(), "peer_approve": True}
+    monkeypatch.setattr(si, "settings", lambda: s)
+    iid = db.add_improvement(author, "clearer errors", "r", "improve/c", "/tmp/c", {"files": ["a"]})
+    listed = asyncio.run(o._exec_improve(other, {"action": "list"}))
+    assert "branch improve/c, worktree /tmp/c" in listed     # where a teammate tests or reads it
+    assert "author" in asyncio.run(o._exec_improve(author, {"action": "approve", "id": iid}))
+    assert asyncio.run(o._exec_improve(other, {"action": "approve", "id": iid})).startswith("approved")
+    assert db.get_improvement(iid)["status"] == "approved"
+    assert "id" in asyncio.run(o._exec_improve(other, {"action": "diff"}))

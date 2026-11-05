@@ -39,7 +39,7 @@ def _turn(agent="webdev", outcome="waiting", flags=("cut_off",), error="", ago=6
 
 
 def _on(monkeypatch, **over):
-    s = {"enabled": True, "autofix": True, "auto_apply": False, "push": False, **over}
+    s = {"enabled": True, "autofix": True, "auto_apply": False, "push": False, "peer_approve": False, **over}
     monkeypatch.setattr(si, "settings", lambda: s)
     monkeypatch.setattr(si, "readiness", lambda: None)
     return s
@@ -162,6 +162,78 @@ def test_an_agents_own_proposal_never_lands_on_its_own(isolated, monkeypatch):
     db.add_improvement("webdev", "new feature", "r", "improve/y", "/tmp/y", {"files": ["a"]})
     monkeypatch.setattr(si, "land", lambda *a: (_ for _ in ()).throw(AssertionError("must not land")))
     assert asyncio.run(si.tick(_Orch())) == "nothing to fix"
+
+
+# ---------- agents approving each other's proposals ----------
+
+def test_agents_cannot_approve_unless_the_owner_lets_them(isolated, monkeypatch):
+    _on(monkeypatch)
+    iid = db.add_improvement("engineer", "faster recall", "r", "improve/z", "/tmp/z", {"files": ["a"]})
+    assert si.approve_by_agent(iid, "reviewer").startswith("refused")
+    assert db.get_improvement(iid)["status"] == "pending"
+
+
+def test_an_author_never_approves_its_own_proposal(isolated, monkeypatch):
+    """One agent talked into a bad change is the risk; a second has to agree."""
+    _on(monkeypatch, peer_approve=True)
+    iid = db.add_improvement("engineer", "faster recall", "r", "improve/z", "/tmp/z", {"files": ["a"]})
+    assert "someone other than its author" in si.approve_by_agent(iid, "engineer")
+    assert db.get_improvement(iid)["status"] == "pending"
+
+
+def test_a_teammates_approval_lands_it_once_nothing_is_running(isolated, monkeypatch):
+    """Self-repair can be off: approving is its own switch, and landing still waits
+    for idle like an owner's approval."""
+    _on(monkeypatch, autofix=False, peer_approve=True)
+    iid = db.add_improvement("engineer", "faster recall", "r", "improve/z", "/tmp/z", {"files": ["a"]})
+    assert si.approve_by_agent(iid, "reviewer").startswith("approved")
+    row = db.get_improvement(iid)
+    assert row["status"] == "approved" and row["stat"]["approved_by"] == "reviewer"
+    assert si.approve_by_agent(iid, "tester").startswith("refused")      # once is enough
+    landed = []
+
+    async def land(i, *a):
+        landed.append(i)
+        return {"ok": True}
+
+    monkeypatch.setattr(si, "land", land)
+    assert "tester" in asyncio.run(si.tick(_Orch(busy=("tester",))))
+    assert landed == []
+    assert asyncio.run(si.tick(_Orch())) == "landed an approved change, restarting"
+    assert landed == [iid]
+
+
+def test_land_takes_an_approved_proposal(isolated, monkeypatch):
+    _on(monkeypatch, peer_approve=True)
+    iid = db.add_improvement("engineer", "faster recall", "r", "improve/z", "/tmp/z", {"files": ["a"]})
+    si.approve_by_agent(iid, "reviewer")
+    seen = []
+
+    async def apply(branch, path):
+        seen.append(branch)
+        return {"ok": True, "from": "aaaa1111", "to": "bbbb2222"}
+
+    monkeypatch.setattr(si, "apply", apply)
+    monkeypatch.setattr(si, "drop_worktree", lambda *a: None)
+    monkeypatch.setattr(si, "restart", lambda: None)
+    assert asyncio.run(si.land(iid))["ok"]
+    row = db.get_improvement(iid)
+    assert seen == ["improve/z"] and row["status"] == "applied"
+    assert row["stat"]["approved_by"] == "reviewer"        # the owner is told who agreed
+
+
+def test_only_the_author_withdraws_unless_teammates_may_decide(isolated, monkeypatch):
+    _on(monkeypatch)
+    monkeypatch.setattr(si, "drop_worktree", lambda *a: None)
+    iid = db.add_improvement("engineer", "faster recall", "r", "improve/z", "/tmp/z", {"files": ["a"]})
+    assert si.reject_by_agent(iid, "reviewer", "no test").startswith("refused")
+    assert "turned down" in si.reject_by_agent(iid, "engineer", "wrong approach")
+    assert db.get_improvement(iid)["status"] == "rejected"
+
+    _on(monkeypatch, peer_approve=True)
+    other = db.add_improvement("engineer", "second try", "r", "improve/w", "/tmp/w", {"files": ["a"]})
+    assert "turned down" in si.reject_by_agent(other, "reviewer", "the test does not fail without it")
+    assert "reviewer" in db.get_improvement(other)["note"]
 
 
 def test_a_fix_is_written_reviewed_and_tested_before_anyone_sees_it(isolated, monkeypatch, tmp_path):

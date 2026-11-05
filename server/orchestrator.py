@@ -308,18 +308,23 @@ TOOL_DEFS = [
         "name": "improve",
         "description": "Propose a change to MISSION CONTROL ITSELF - this app: its server, "
                        "its web UI, its tools. Use it when you hit a real limitation or bug "
-                       "in the app while working, not to invent features nobody asked for. "
+                       "in the app while working, or when improving the app is the work you "
+                       "were given, not to invent features nobody asked for. "
                        "action=propose takes a title, why it is worth doing, and exact "
                        "instructions; the change is written and TESTED on its own branch, "
                        "never in the running code, and the owner decides whether it lands. "
                        "It cannot touch the limits you run under (the terminal blocklist, "
                        "the budget, the ledger, CI) - if a proposal needs one of those, say "
-                       "so to the owner in chat instead. action=list shows proposals and "
-                       "where they stand.",
+                       "so to the owner in chat instead. action=list shows proposals, their "
+                       "branches and where they stand; action=diff (id) shows one's change. "
+                       "Where the owner lets agents approve each other's proposals, "
+                       "action=approve (id) lands a teammate's once nothing is running, and "
+                       "action=reject (id, rationale) turns one down; never your own approve.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["propose", "list"]},
+                "action": {"type": "string", "enum": ["propose", "list", "diff", "approve", "reject"]},
+                "id": {"type": "integer", "description": "the proposal, for diff, approve and reject"},
                 "title": {"type": "string", "description": "short name for the change"},
                 "rationale": {"type": "string",
                               "description": "what went wrong or was missing, concretely, "
@@ -1426,7 +1431,9 @@ class Orchestrator:
             block = await asyncio.to_thread(si.readiness)
             if block is None:
                 out.append("  self-improvement: ON — you may use the improve tool to "
-                           "propose a change to Mission Control itself")
+                           "propose a change to Mission Control itself"
+                           + ("; agents approve each other's proposals, the owner is not asked"
+                              if si.settings()["peer_approve"] else ""))
             else:
                 out.append(f"  self-improvement: unavailable — {block}")
         except Exception:
@@ -2694,14 +2701,39 @@ class Orchestrator:
             rows = await asyncio.to_thread(db.list_improvements, None, 20)
             if not rows:
                 return "no proposals yet"
+            # The branch and worktree are what a teammate needs to test or read one.
             return "\n".join(
                 f"[{r['id']}] {r['status']:8} {r['title']} "
                 f"({r['agent']}, {len(r['stat'].get('files') or [])} files, "
-                f"+{r['stat'].get('added', 0)}/-{r['stat'].get('removed', 0)})"
+                f"+{r['stat'].get('added', 0)}/-{r['stat'].get('removed', 0)}"
+                + (f", approved by {r['stat']['approved_by']}" if r['stat'].get('approved_by') else "")
+                + (f"; branch {r['branch']}, worktree {r['worktree']}"
+                   if r["status"] in ("pending", "approved") else "") + ")"
                 for r in rows)
 
+        if action in ("diff", "approve", "reject"):
+            try:
+                iid = int(args.get("id"))
+            except (TypeError, ValueError):
+                return "give the proposal's id (see action=list)"
+            if action == "approve":
+                out = await asyncio.to_thread(si.approve_by_agent, iid, aid)
+            elif action == "reject":
+                why = (args.get("rationale") or "").strip()
+                if not why:
+                    return "say why in rationale; the author reads it"
+                out = await asyncio.to_thread(si.reject_by_agent, iid, aid, why)
+            else:
+                row = await asyncio.to_thread(db.get_improvement, iid)
+                if not row:
+                    return "no proposal with that id"
+                code, out = await asyncio.to_thread(si._git, "diff", f"master...{row['branch']}")
+                return (out if code == 0 else f"could not read the diff: {out}")[:30000] or "(empty diff)"
+            await self._emit({"type": "improvements_updated"})
+            return out
+
         if action != "propose":
-            return "action must be propose or list"
+            return "action must be propose, list, diff, approve or reject"
 
         title = (args.get("title") or "").strip()
         rationale = (args.get("rationale") or "").strip()
@@ -2765,10 +2797,14 @@ class Orchestrator:
                                "files": result["files"], "added": result["added"],
                                "removed": result["removed"]})
         await self._emit({"type": "improvements_updated"})
+        stands = (f"proposal [{iid}] is on branch {branch}, worktree {path}: "
+                  f"{len(result['files'])} files, +{result['added']}/-{result['removed']}, tests green. ")
+        if si.settings()["peer_approve"]:
+            # The owner chose not to be asked, so nothing pings them; a teammate decides.
+            return (stands + "It changes nothing until another agent approves it with "
+                    "improve action=approve, or the owner does in Settings > Improve.")
         await cloudlink.notify(f"improve:{iid}", "A change is waiting on you",
                                f"{self.agents[aid]['name']} proposed '{title}'. "
                                f"Open the app to review it.")
-        return (f"proposal [{iid}] is on branch {branch}: "
-                f"{len(result['files'])} files, +{result['added']}/-{result['removed']}, "
-                f"tests green. It changes nothing until the owner approves it in "
-                f"Settings > Improve. Tell them briefly what it does and why.")
+        return (stands + "It changes nothing until the owner approves it in "
+                "Settings > Improve. Tell them briefly what it does and why.")

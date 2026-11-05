@@ -203,6 +203,10 @@ code, from who sent an event, never from what the model concludes about it.
 - A reply can attach only files a Worker reported. The Router cannot post on GitHub.
 - An outsider cannot reopen a finished task.
 - Self-repair cannot touch the files that hold these gates (`selfimprove.PROTECTED`).
+- An agent's proposal to change Mission Control waits for the owner, unless they let agents
+  approve each other's (Settings > Improve). Then a second agent approves it, never its
+  author, and it lands only as the owner's approval would: tests green, no protected file,
+  nothing running, the rollback watchdog armed.
 
 **This is defence in depth, not a sandbox.** Inferred work still runs as the owner's user
 on the owner's machine. It can read files the patterns do not name, a determined script

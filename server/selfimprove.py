@@ -20,10 +20,11 @@ The rules, in the order they bite:
    nobody approved.
 6. The test suite must pass in the worktree before the owner is even shown the
    proposal. A red proposal is not a proposal.
-7. The owner approves in the app, explicitly, having seen the diffstat. The
-   one exception is self-repair (below), and only once the owner has switched
-   on landing its fixes: an agent's own proposal always waits for the owner,
-   because an agent can be talked into things by what it reads.
+7. The owner approves in the app, explicitly, having seen the diffstat. There
+   are two exceptions, each only once the owner has switched it on: self-repair
+   (below) landing its own fixes, and agents approving each other's proposals.
+   An agent never approves its own, because an agent can be talked into things
+   by what it reads, and a second one has to be talked into the same thing.
 8. Applying fast-forwards the branch, restarts, and health-checks. If the app
    does not come back, a detached watchdog rolls the merge back and restarts
    again — because a bad merge takes away the very UI you would fix it from.
@@ -115,7 +116,8 @@ def enabled() -> bool:
 def settings() -> dict:
     s = cfg.load().get("selfimprove") or {}
     return {"enabled": bool(s.get("enabled", False)), "autofix": bool(s.get("autofix", False)),
-            "auto_apply": bool(s.get("auto_apply", False)), "push": bool(s.get("push", False))}
+            "auto_apply": bool(s.get("auto_apply", False)), "push": bool(s.get("push", False)),
+            "peer_approve": bool(s.get("peer_approve", False))}
 
 
 def _git(*args, cwd=None, timeout=120, env=None) -> tuple[int, str]:
@@ -557,7 +559,7 @@ async def land(iid: int, broadcast=None, orch=None) -> dict:
     pushing on, the push happens after the restart, once the app is back."""
     import db
     row = await asyncio.to_thread(db.get_improvement, iid)
-    if not row or row["status"] != "pending":
+    if not row or row["status"] not in ("pending", "approved"):
         return {"ok": False, "error": "no pending proposal with that id"}
     res = await apply(row["branch"], row["worktree"])
     if not res.get("ok"):
@@ -576,6 +578,57 @@ async def land(iid: int, broadcast=None, orch=None) -> dict:
     await asyncio.to_thread(restart)
     return {**res, "note": "restarting; if the app does not come back the change is "
                            "rolled back automatically"}
+
+
+def _name(orch, aid: str) -> str:
+    return ((getattr(orch, "agents", {}) or {}).get(aid) or {}).get("name") or aid
+
+
+def approve_by_agent(iid: int, aid: str) -> str:
+    """An agent approving a teammate's proposal, where the owner lets them. It lands
+    at the next check that finds nothing running, as an owner's approval would."""
+    import db
+    if not settings()["peer_approve"]:
+        return ("refused: the owner approves proposals themselves. Agents approving each other's "
+                "is a switch in Settings > Improve that is off")
+    row = db.get_improvement(iid)
+    if not row or row["status"] != "pending":
+        return "refused: no proposal with that id is waiting for approval"
+    if row["agent"] == aid:
+        return "refused: a proposal needs someone other than its author to approve it"
+    db.update_improvement(iid, status="approved", stat={**(row.get("stat") or {}), "approved_by": aid},
+                          note=f"approved by {aid}; lands once nothing is running")
+    logger.info("improvement %s approved by %s", iid, aid)
+    return (f"approved [{iid}]. It lands at the next check that finds no task running, "
+            "behind the rollback watchdog, and is pushed if the owner allows pushing")
+
+
+def reject_by_agent(iid: int, aid: str, why: str) -> str:
+    """Binning a proposal. Its author may always withdraw it; a teammate only where
+    the owner lets agents decide on each other's work."""
+    import db
+    row = db.get_improvement(iid)
+    if not row or row["status"] not in ("pending", "approved"):
+        return "refused: no proposal with that id is waiting"
+    if row["agent"] != aid and not settings()["peer_approve"]:
+        return "refused: only its author or the owner can turn this proposal down"
+    drop_worktree(row["branch"], row["worktree"])
+    db.update_improvement(iid, status="rejected", note=f"turned down by {aid}: {why}"[:1500])
+    return f"proposal [{iid}] turned down and its branch discarded"
+
+
+async def _land_approved(orch, broadcast) -> str | None:
+    """Land what an agent approved, once no task is running. None when nothing is."""
+    import db
+    rows = await asyncio.to_thread(db.list_improvements, "approved", 20)
+    if not rows:
+        return None
+    busy = _busy(orch)
+    if busy:
+        return f"an approved change lands when {', '.join(busy)} finish"
+    res = await land(rows[-1]["id"], broadcast, orch)
+    return "landed an approved change, restarting" if res.get("ok") else \
+        f"could not land an approved change: {res.get('error', '')[:200]}"
 
 
 def push_master() -> tuple[bool, str]:
@@ -639,6 +692,10 @@ async def after_restart(orch=None, broadcast=None):
         if r["agent"] == AUTO:
             await _tell_owner(orch, f"Self-repair landed “{r['title']}” ({st.get('to')})"
                                     + (", and pushed it." if ok else f". Not pushed: {out}"))
+        elif st.get("approved_by"):
+            await _tell_owner(orch, f"{_name(orch, r['agent'])}'s change “{r['title']}”, approved by "
+                                    f"{_name(orch, st['approved_by'])}, landed ({st.get('to')})"
+                                    + (", and was pushed." if ok else f". Not pushed: {out}"))
     await _emit(broadcast)
 
 
@@ -655,6 +712,11 @@ async def tick(orch, broadcast=None, now: float | None = None) -> str:
 
 async def _tick(orch, broadcast, now) -> str:
     s = settings()
+    if s["enabled"] and s["peer_approve"]:
+        block = await asyncio.to_thread(readiness)
+        landed = None if block else await _land_approved(orch, broadcast)
+        if landed:
+            return landed
     if not (s["enabled"] and s["autofix"]):
         return "off"
     block = await asyncio.to_thread(readiness)
