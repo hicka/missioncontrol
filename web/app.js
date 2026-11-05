@@ -2542,6 +2542,7 @@ async function renderApple() {
 const IMP_STATUS = {
   fixing: "fixing", pending: "waiting on you", applied: "landed", pushed: "landed and pushed",
   discarded: "discarded", rolled_back: "rolled back", failed: "failed", rejected: "rejected",
+  approved: "approved, lands when nothing is running",
 };
 const ISSUE_STATE = {
   open: "not fixed yet", fixing: "fixing now", pending: "fix ready", gave_up: "needs you",
@@ -2556,7 +2557,8 @@ async function renderImprovements() {
     const key = box.dataset.key;
     box.checked = !!set[key];
     // each switch only means something once the one above it is on
-    box.disabled = (key === "autofix" && !set.enabled) || (key === "auto_apply" && !(set.enabled && set.autofix));
+    box.disabled = ((key === "autofix" || key === "peer_approve") && !set.enabled) ||
+      (key === "auto_apply" && !(set.enabled && set.autofix));
     if (box.dataset.wired) return;
     box.dataset.wired = "1";
     box.addEventListener("change", async () => {
@@ -2600,14 +2602,20 @@ async function renderImprovements() {
       <details><summary class="mem-meta">Evidence</summary><pre class="imp-pre">${esc(i.evidence)}</pre></details>
     </div>`).join("") : (set.enabled && set.autofix ? `<div class="set-hint">No problem has repeated on the code running now.</div>` : "");
 
-  const pending = S.improvements.filter((i) => i.status === "pending").length;
+  // with agents approving each other's, their proposals are not waiting on you
+  const peers = !!set.peer_approve;
+  const pending = S.improvements.filter((i) => i.status === "pending" && !(peers && i.agent !== "selfimprove")).length;
   const badge = $("#improve-badge");
   badge.classList.toggle("hidden", !pending);
   badge.textContent = pending || "";
 
   $("#improve-list").innerHTML = S.improvements.length ? S.improvements.map((i) => {
     const auto = i.agent === "selfimprove";
-    const status = auto && i.status === "pending" && autoApply ? "lands when nothing is running" : (IMP_STATUS[i.status] || i.status);
+    const by = i.stat.approved_by ? ` by ${S.agents[i.stat.approved_by]?.name || i.stat.approved_by}` : "";
+    const status = auto && i.status === "pending" && autoApply ? "lands when nothing is running"
+      : !auto && i.status === "pending" && peers ? "waiting for a teammate"
+      : i.status === "approved" ? `approved${by}, lands when nothing is running`
+      : (IMP_STATUS[i.status] || i.status);
     return `
     <div class="mem-row imp-row" data-id="${i.id}">
       <div class="mem-head"><span class="mem-kind">${esc(status)}</span>
@@ -2616,7 +2624,7 @@ async function renderImprovements() {
         </span>
         <span class="mem-actions">
           ${["fixing", "discarded"].includes(i.status) ? "" : `<button class="imp-btn" data-id="${i.id}" data-act="diff">diff</button>`}
-          ${i.status === "pending" ? `<button class="imp-btn" data-id="${i.id}" data-act="approve">${auto && autoApply ? "land now" : "approve"}</button><button class="imp-btn mem-del" data-id="${i.id}" data-act="reject">reject</button>` : ""}
+          ${["pending", "approved"].includes(i.status) ? `<button class="imp-btn" data-id="${i.id}" data-act="approve">${(auto && autoApply) || i.status === "approved" ? "land now" : "approve"}</button><button class="imp-btn mem-del" data-id="${i.id}" data-act="reject">reject</button>` : ""}
         </span></div>
       ${i.note ? `<div class="mem-text">${esc(i.note)}</div>` : ""}
       <div class="imp-diff hidden"></div>

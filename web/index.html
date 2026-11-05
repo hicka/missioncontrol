@@ -279,8 +279,13 @@
       <div class="set-card">
         <div class="set-row">
           <div class="set-row-label">Let it propose changes</div>
-          <div class="set-row-note">A task that hits a real limitation in the app can put a tested branch in front of you. Proposals always wait for your approval.</div>
+          <div class="set-row-note">A task that hits a real limitation in the app can put a tested branch in front of you. Proposals wait for your approval unless you let agents approve each other's.</div>
           <label class="switch"><input type="checkbox" class="improve-switch" data-key="enabled" id="improve-enabled"><span></span></label>
+        </div>
+        <div class="set-row">
+          <div class="set-row-label">Let agents approve each other's changes</div>
+          <div class="set-row-note">A proposal lands without you once a different agent approves it, never its author. It still has to pass the tests, still cannot touch the files listed below, and still lands only when nothing is running, behind the rollback watchdog.</div>
+          <label class="switch"><input type="checkbox" class="improve-switch" data-key="peer_approve"><span></span></label>
         </div>
         <div class="set-row">
           <div class="set-row-label">Find and fix its own problems</div>
