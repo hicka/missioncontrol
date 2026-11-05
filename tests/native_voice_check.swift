@@ -38,6 +38,20 @@ struct VoiceCheck {
             }
             precondition(count >= 2, "Speech was not streamed")
             print("Native API transcription and streamed WAV checks passed.")
+            if CommandLine.arguments.contains("--playback") {
+                let speaker = Speaker()
+                speaker.speak("Hey, I'm here. This sentence will be interrupted.", api: api)
+                try await Task.sleep(nanoseconds: 800_000_000)
+                speaker.stop()
+                precondition(!speaker.speaking)
+                speaker.speak("The floating bar's local voice is ready.", api: api)
+                for _ in 0..<200 {
+                    if !speaker.speaking { break }
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                }
+                precondition(!speaker.speaking && speaker.error.isEmpty, "Playback failed or stalled after interruption")
+                print("Native playback, interruption and replay passed.")
+            }
         }
     }
 }
