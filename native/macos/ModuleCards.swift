@@ -55,6 +55,8 @@ struct ModuleCardView: View {
             header
             CardNode(node: card.view, fields: $fields, act: send)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // On the desktop a press on text drags the card, so the text is not selectable.
+                .environment(\.cardTextSelectable, !onDesktop)
             footer
         }
         .padding(14)
@@ -121,8 +123,24 @@ struct ModuleCardView: View {
     }
 }
 
+private struct CardTextSelectable: EnvironmentKey { static let defaultValue = true }
+extension EnvironmentValues {
+    var cardTextSelectable: Bool {
+        get { self[CardTextSelectable.self] }
+        set { self[CardTextSelectable.self] = newValue }
+    }
+}
+
+private struct Selectable: ViewModifier {
+    let on: Bool
+    func body(content: Content) -> some View {
+        if on { content.textSelection(.enabled) } else { content.textSelection(.disabled) }
+    }
+}
+
 /// One node and what is under it.
 private struct CardNode: View {
+    @Environment(\.cardTextSelectable) private var selectable
     let node: JSON
     @Binding var fields: [String: JSON]
     let act: (String, JSON) -> Void
@@ -233,7 +251,7 @@ private struct CardNode: View {
             .foregroundStyle(ModuleTone.color(node.tone.str))
             .lineLimit(lines)
             .fixedSize(horizontal: false, vertical: lines == nil)
-            .textSelection(.enabled)
+            .modifier(Selectable(on: selectable))
     }
 
     private var stat: some View {
