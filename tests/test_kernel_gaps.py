@@ -3481,6 +3481,28 @@ def test_a_reply_answers_the_conversation_it_went_to_and_only_that(isolated, mon
     asyncio.run(main())
 
 
+def test_a_reply_down_the_phone_is_the_answer_in_the_app_too(isolated, monkeypatch):
+    """The owner said "yes merge" in the app. The Router replied by iMessage, which shows
+    in the app's chat too, and then said the same thing again as its closing words,
+    because the app message still counted as unanswered. They got it twice."""
+    model = Hold(monkeypatch)
+    sends = []
+
+    async def main():
+        o = make(monkeypatch, sends)
+        store.thread_upsert("imessage:+960", "imessage", "conversation", "x",
+                            {"conversation": f"dm:{o.lead}", "channel": "imessage", "chat": "+960"})
+        model.router = [call("reply", text="PR #14 is merged.", thread="imessage"),
+                        say("PR #14 is merged, and I'm watching the master check.")]
+        await o.user_message(f"dm:{o.lead}", "yes merge")
+        await until(lambda: len(model.router_calls) >= 2)
+        await until(lambda: store.triggers(1, f"dm:{o.lead}")[0]["disposition"] == "answered")
+        assert sends == [("imessage", "+960", "PR #14 is merged.")]
+        assert [m["text"] for m in chat(o, sender=o.lead)] == ["PR #14 is merged."]
+        await wind_down(o)
+    asyncio.run(main())
+
+
 def test_someone_writing_from_app_and_phone_gets_one_answer_in_the_chat(isolated, monkeypatch):
     model = Hold(monkeypatch)
     state = {}

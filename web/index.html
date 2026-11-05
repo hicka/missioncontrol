@@ -191,6 +191,8 @@
       <label>Allowed tools<input id="na-tools" type="text" placeholder="All tools (or comma-separated names)"></label>
       <label>Allowed skills<input id="na-skills" type="text" placeholder="All skills (or comma-separated slugs)"></label>
       <p>Blank uses all available capabilities. Enter “none” to disable. Skill contracts can narrow tool access further.</p>
+      <label>Runs on its own<input id="na-own" type="text" placeholder="None (or comma-separated owner/repo)" autocomplete="off" spellcheck="false"></label>
+      <p>In these repositories it pushes branches, opens, reviews and merges pull requests, and comments on issues without asking you, even on scheduled work. Force pushes, pushes to a shared branch, tags, releases and settings still wait for you.</p>
     </details>
     <label class="na-check" id="na-imsg-row">
       <input type="checkbox" id="na-imsg">

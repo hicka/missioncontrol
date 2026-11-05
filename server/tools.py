@@ -213,23 +213,36 @@ _FILE_WRITE = re.compile(r"(?ix) \bsed\s+-i | \btee\b | \bchmod\b | \bchown\b |"
 _REDIRECT = re.compile(r">>?\s*(?P<target>[^\s|;&]+)")
 
 
-def _repo_tokens() -> tuple[str, ...]:
+def _self_mention() -> re.Pattern:
+    """This checkout however a command names it, and nothing that merely shares its name:
+    ~/missioncontrol-mobile, a clone at ~/code/missioncontrol and github.com/you/missioncontrol
+    are other repositories, and a team working on them is doing ordinary work."""
     home = str(Path.home())
-    return (SELF_REPO, SELF_REPO.replace(home, "~"), Path(SELF_REPO).name)
+    spelled = [re.escape(SELF_REPO)]
+    if SELF_REPO.startswith(home + os.sep):
+        rel = re.escape(SELF_REPO[len(home) + 1:])
+        # as typed from home, where a bare name is this checkout and not some other one
+        spelled += [r"~/" + rel, r"\$\{?HOME\}?/" + rel, r"(?<![\w./~$-])" + rel]
+    return re.compile(rf"(?:{'|'.join(spelled)})(?![\w.-])")
 
 
 def _mentions_self_repo(text: str) -> bool:
-    return any(tok and tok in text for tok in _repo_tokens())
+    return bool(_self_mention().search(text))
+
+
+def _inside_self_repo(workdir: str) -> bool:
+    real = os.path.realpath(workdir)
+    return real == SELF_REPO or real.startswith(SELF_REPO + os.sep)
 
 
 def _targets_self_repo(cmd: str, workdir: str) -> bool:
-    return os.path.realpath(workdir).startswith(SELF_REPO) or _mentions_self_repo(cmd)
+    return _inside_self_repo(workdir) or _mentions_self_repo(cmd)
 
 
 def _self_edit_blocked(cmd: str, workdir: str) -> str | None:
     if not _targets_self_repo(cmd, workdir):
         return None
-    inside = os.path.realpath(workdir).startswith(SELF_REPO)
+    inside = _inside_self_repo(workdir)
     hit = bool(_GIT_WRITE.search(cmd)) or bool(_FILE_WRITE.search(cmd))
     if not hit:
         # a redirection only counts when it lands in the repo: writing a grep
@@ -241,8 +254,9 @@ def _self_edit_blocked(cmd: str, workdir: str) -> str | None:
                 break
     if not hit:
         return None      # reading Mission Control's own code is always fine
-    return ("blocked: this changes Mission Control's own checkout. Read it all you "
-            "like, but to change it use the improve tool - it writes the change on "
+    return ("blocked: this changes the checkout Mission Control is running from. Read it "
+            "all you like, but change it somewhere else: in a clone of its repository, "
+            "through a pull request, or with the improve tool, which writes the change on "
             "its own branch, runs the tests, and puts the diff in front of the owner. "
             "Editing the running app directly means a restart boots code nobody "
             "reviewed.")

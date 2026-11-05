@@ -15,7 +15,9 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import re
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -186,6 +188,130 @@ def agent_env(command: str) -> dict | None:
     if not token or ledger.needs_owner_login(command):
         return None
     return {"GH_TOKEN": token, "GH_HOST": "github.com"}
+
+
+# ---------- repositories a profile runs on its own ----------
+#
+# The owner can give a profile repositories of its own (own_repos on the profile). In
+# them, work nobody asked for this minute, such as a scheduled round and what it hands
+# on, carries its own changes all the way: a branch, a pull request, a review, a merge,
+# and talk on issues. What stays the owner's even there: rewriting a shared branch, a
+# force push, tags and releases, settings, secrets, and the raw API. Anything this
+# cannot read for certain counts as not covered, and is held as before.
+
+_OWN_GH = {("pr", verb) for verb in ("create", "merge", "review", "comment", "close", "ready", "edit", "reopen")} | {
+    ("issue", verb) for verb in ("create", "comment", "edit", "close", "reopen")} | {
+    ("label", "create"), ("label", "edit"), ("run", "rerun"), ("run", "cancel"), ("workflow", "run")}
+_PUSH_FLAGS = {"-u", "--set-upstream", "-q", "--quiet", "--porcelain", "-v", "--verbose"}
+_GITHUB_REPO = re.compile(r"github\.com[:/]+([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
+_REDIRECT = re.compile(r"(?<!\S)\d*>>?(?:&\d+|\s*\S+)")
+_SEPARATOR = re.compile(r"&&|\|\||[;|&\n]")
+
+
+def _repo_of_url(url: str) -> str | None:
+    found = _GITHUB_REPO.search((url or "").strip())
+    return f"{found[1]}/{found[2]}".lower() if found else None
+
+
+def _git_out(workdir: str, *args: str) -> str | None:
+    try:
+        result = subprocess.run(["git", "-C", workdir, *args], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _remote_repo(workdir: str, remote: str | None) -> str | None:
+    """The GitHub repository a remote of this checkout points at. With none named, only
+    a checkout with a single remote says which one is meant."""
+    if remote is None:
+        names = (_git_out(workdir, "remote") or "").split()
+        if len(names) != 1:
+            return None
+        remote = names[0]
+    if "/" in remote or ":" in remote:
+        return _repo_of_url(remote)
+    return _repo_of_url(_git_out(workdir, "remote", "get-url", "--push", remote) or "")
+
+
+def _push_repo(args: list[str], workdir: str) -> str | None:
+    import router
+    positional = []
+    for arg in args:
+        if arg.startswith("-"):
+            if arg not in _PUSH_FLAGS:
+                return None
+            continue
+        positional.append(arg)
+    remote, specs = (positional[0], positional[1:]) if positional else (None, [])
+    current = _git_out(workdir, "rev-parse", "--abbrev-ref", "HEAD") or ""
+    for spec in specs or [current]:
+        src, _, dst = spec.partition(":")
+        target = (dst or src).removeprefix("refs/heads/")
+        if target == "HEAD":
+            target = current
+        tag = _git_out(workdir, "rev-parse", "--verify", "--quiet", f"refs/tags/{src}") is not None
+        if (not src or spec.startswith("+") or tag or not target or target.startswith("refs/")
+                or target in router.SHARED_BRANCHES):
+            return None
+    return _remote_repo(workdir, remote)
+
+
+def _gh_repo(args: list[str], workdir: str) -> str | None:
+    named, rest, i = None, [], 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-R", "--repo") and i + 1 < len(args):
+            named, i = args[i + 1], i + 2
+            continue
+        if arg.startswith("--repo="):
+            named = arg.split("=", 1)[1]
+        else:
+            rest.append(arg)
+        i += 1
+    if tuple(rest[:2]) not in _OWN_GH or "--admin" in rest:
+        return None
+    if named:
+        return named.lower() if re.fullmatch(r"[\w.-]+/[\w.-]+", named) else _repo_of_url(named)
+    return _remote_repo(workdir, None)
+
+
+def own_repo_work(command: str, workdir: str, repos) -> bool:
+    """Whether everything outward in this command is the kind of work a profile does on
+    its own, in a repository the owner gave it."""
+    owned = {r.lower() for r in repos or ()}
+    run = ledger._without_text(command)
+    if not owned or ledger._RUNS_TEXT.search(run):
+        return False
+    here, touched = os.path.expanduser(workdir), set()
+    for segment in _SEPARATOR.split(_REDIRECT.sub(" ", run)):
+        words = [w.strip("'\"") for w in segment.split()]
+        if not words:
+            continue
+        if words[0] == "cd":
+            here = os.path.join(here, os.path.expanduser(words[1] if len(words) > 1 else "~"))
+            continue
+        if not ledger.is_outward(segment):
+            continue
+        repo = None
+        if words[0] == "git":
+            where, i = here, 1
+            while i + 1 < len(words) and words[i] == "-C":
+                where, i = os.path.join(here, os.path.expanduser(words[i + 1])), i + 2
+            if words[i:i + 1] == ["push"]:
+                repo = _push_repo(words[i + 1:], where)
+        elif words[0] == "gh":
+            repo = _gh_repo(words[1:], here)
+        if repo not in owned:
+            return False
+        touched.add(repo)
+    return bool(touched)
+
+
+def own_repo_intent(repos) -> str:
+    """What the owner said by giving a profile repositories, for the judge of commands."""
+    return (f"I let this agent run {', '.join(repos)} on its own: it pushes branches, opens, reviews and "
+            "merges pull requests, and comments on issues there without asking me.")
 
 
 def _agent_posted(evt: dict, actions: list[dict]) -> bool:

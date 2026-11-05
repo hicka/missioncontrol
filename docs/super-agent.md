@@ -176,6 +176,13 @@ code, from who sent an event, never from what the model concludes about it.
 - Standing work (a job, the heartbeat) has outward commands and the owner's secrets held. A
   pulse once ran a production deploy on its own. It keeps `claude_code`, because jobs use it to
   prepare things, with `git push`, deploys, publishing and network clients disallowed in there.
+- A profile can be given repositories to run on its own (`own_repos`, Limits and permissions on
+  its profile). There its standing and explicit work pushes branches, opens, reviews and merges
+  pull requests, and comments on issues without being held, and it may post even when only the
+  review profile otherwise does. This is how a team keeps a repository going between the owner's
+  messages. A force push, a push to a shared branch, tags, releases, settings, secrets and
+  `gh api` writes stay held, as does any command `github.own_repo_work` cannot read for certain.
+  Inferred work gets nothing from it: an outsider's issue never ships code by itself.
 - A watch is a shell that runs unattended, so it gets no more than the terminal would allow
   that same work: nothing outward for anyone, no network for inferred work, and the owner's keys
   only for work they asked for. A job's `monitor_cmd` passes the same check.

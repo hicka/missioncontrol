@@ -1186,7 +1186,7 @@ async def agents_full():
          "shape": a.get("shape", "face"), "order": a.get("order", 99),
          "cwd": a.get("cwd", "~"), "blurb": a.get("blurb", ""),
          "prompt": a.get("prompt", ""), "llm": a.get("llm") or {},
-         "tools": a.get("tools"), "skills": a.get("skills"),
+         "tools": a.get("tools"), "skills": a.get("skills"), "own_repos": a.get("own_repos") or [],
          "max_tool_rounds": a.get("max_tool_rounds", orch_mod.MAX_TOOL_ROUNDS),
          "max_tool_calls": a.get("max_tool_calls", 160)}
         for a in orch.agents.values()
@@ -1205,6 +1205,8 @@ class AgentUpdateBody(BaseModel):
     skills: list[str] | None = None
     max_tool_rounds: int | None = Field(default=None, ge=1, le=200)
     max_tool_calls: int | None = Field(default=None, ge=1, le=800)
+    # owner/name repositories it pushes, opens, reviews and merges pull requests in unasked
+    own_repos: list[str] | None = None
 
 
 @app.put("/api/agents/{aid}")
