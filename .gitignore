@@ -30,6 +30,7 @@ package-lock.json
 
 # Environment
 venv/
+models/
 __pycache__/
 *.pyc
 .pytest_cache/

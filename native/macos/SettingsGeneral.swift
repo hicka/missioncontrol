@@ -203,9 +203,12 @@ private struct OwnerNameSection: View {
 
 private struct VoiceForm: Equatable {
     var voice = "", speed = 0.95
+    var provider = "auto", localOnly = false
     init(_ reply: JSON) {
         voice = reply.voice.str
         speed = reply.speed.optNum ?? 0.95
+        provider = reply.provider.optStr ?? "auto"
+        localOnly = reply.local_only.flag || ["kokoro", "local"].contains(provider)
     }
 }
 
@@ -226,7 +229,8 @@ struct SettingsVoicePane: View {
 
     private var listening: String {
         if providers.isNull { return "Checking…" }
-        if providers.whisper.flag { return "Whisper on this Mac, nothing leaves the machine" }
+        if providers.whisper.flag { return form.value.localOnly ? "Local Whisper · cloud fallback disabled" : "Local Whisper · cloud fallback allowed" }
+        if form.value.localOnly { return "Local Whisper unavailable · install the voice models" }
         return providers.openai.flag ? "OpenAI Whisper" : "Not available: install faster-whisper in the server's venv"
     }
 
@@ -234,6 +238,23 @@ struct SettingsVoicePane: View {
         Form {
             Section {
                 SettingsProblemRow(problem: problem)
+                Picker("Speech engine", selection: $form.value.provider) {
+                    Text("Local neural voice · Kokoro").tag("kokoro")
+                    Text("Automatic").tag("auto")
+                    Text("MiniMax").tag("minimax")
+                    Text("OpenAI").tag("openai")
+                    Text("macOS system voice").tag("local")
+                }
+                .onChange(of: form.value.provider) { old, next in
+                    guard old != next else { return }
+                    if ["kokoro", "local"].contains(next) { form.value.localOnly = true }
+                    else if ["minimax", "openai"].contains(next) { form.value.localOnly = false }
+                    if next == "kokoro", !["af_heart", "af_bella", "am_michael", "bf_emma", "bm_george"].contains(form.value.voice) {
+                        form.value.voice = "af_heart"
+                    }
+                }
+                Toggle("Keep speech processing on this machine", isOn: $form.value.localOnly)
+                    .disabled(["kokoro", "local"].contains(form.value.provider))
                 Picker("Voice", selection: $form.value.voice) {
                     ForEach(voices, id: \.self) { Text($0.name.str).tag($0["id"].str) }
                     if !voices.contains(where: { $0["id"].str == form.value.voice }) {
@@ -248,7 +269,7 @@ struct SettingsVoicePane: View {
                 }
                 LabeledContent("Listening", value: listening)
             } footer: {
-                SettingsHint("One voice everywhere: voice mode here, spoken replies on the phone, voice notes on iMessage and Telegram. Licensed studio voices through your model provider's key.")
+                SettingsHint("The floating bar uses these speech settings. Hold ⌥Space to talk and release to send, or click the microphone and pause. Escape cancels input or playback. Transcripts go to your configured agent model.")
             }
             Section {
                 SettingsActions(status: status) {
@@ -285,8 +306,11 @@ struct SettingsVoicePane: View {
 
     private func save() async -> Bool {
         do {
-            let reply = try await store.settingsAPI().put(Self.path, ["voice": form.value.voice, "speed": form.value.speed])
+            let reply = try await store.settingsAPI().put(Self.path, ["provider": form.value.provider,
+                "local_only": form.value.localOnly, "voice": form.value.voice, "speed": form.value.speed])
             form.reset(to: VoiceForm(reply))
+            providers = reply.providers
+            await loadVoices()
             status = .good("Saved")
             return true
         } catch {

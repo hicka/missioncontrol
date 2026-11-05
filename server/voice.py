@@ -1,10 +1,7 @@
-"""Text to speech for the team.
+"""Shared speech for conversations and voice notes, with an offline neural mode.
 
-One configured voice speaks everywhere: the phone's realtime voice mode,
-spoken replies in chat, and voice notes on iMessage or Telegram.
-Providers in order of preference: MiniMax (licensed studio voices, the
-same key the model uses), OpenAI TTS, then the macOS voice so it always
-works. Audio is cached under uploads/tts so a bubble is synthesised once.
+Kokoro and Whisper stay loaded between turns. Explicit local providers never
+fall back to cloud services. Other providers retain the automatic fallback.
 """
 import asyncio
 import processes
@@ -12,6 +9,10 @@ import hashlib
 import os
 import sys
 import time
+import logging
+import re
+import threading
+import local_voice
 
 import settings as cfg
 from apphome import ROOT
@@ -20,12 +21,21 @@ TTS_DIR = ROOT / "uploads" / "tts"
 MAX_CHARS = 1500
 
 DEFAULTS = {
-    "provider": "auto",           # auto | minimax | openai | local
+    "provider": "auto",           # auto | kokoro | minimax | openai | local
     "voice": "English_Deep-VoicedGentleman",
     "speed": 0.95,
     "speak_replies": False,       # phone speaks new agent replies in chat
     "stt_model": "base.en",       # local Whisper size: tiny.en, base.en, small.en
+    "local_only": False,         # never fall back to a cloud speech service
 }
+
+logger = logging.getLogger(__name__)
+_stt_lock = threading.Lock()
+
+
+def offline(s=None) -> bool:
+    s = s or settings()
+    return bool(s["local_only"] or s["provider"] in ("kokoro", "local"))
 
 MINIMAX_HOST = "https://api.minimax.io"
 OPENAI_VOICES = ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"]
@@ -49,6 +59,7 @@ def providers() -> dict:
         "minimax": bool(cfg.env_get("MINIMAX_API_KEY")),
         "openai": bool(cfg.env_get("OPENAI_API_KEY")),
         "local": sys.platform == "darwin",
+        "kokoro": local_voice.available(),
         "whisper": stt_available(),
     }
 
@@ -66,9 +77,13 @@ _stt: dict = {"model": None, "name": None}
 
 def _stt_model():
     name = settings()["stt_model"]
+    bundled = local_voice.MODEL_DIR / f"whisper-{name}"
+    if bundled.is_dir():
+        name = str(bundled)
     if _stt["model"] is None or _stt["name"] != name:
         from faster_whisper import WhisperModel
-        _stt["model"] = WhisperModel(name, device="cpu", compute_type="int8")
+        _stt["model"] = WhisperModel(name, device="cpu", compute_type="int8",
+                                     cpu_threads=4, local_files_only=offline())
         _stt["name"] = name
     return _stt["model"]
 
@@ -79,28 +94,33 @@ def _local_transcribe(data: bytes, filename: str) -> str:
     with tempfile.NamedTemporaryFile(suffix=suffix) as f:
         f.write(data)
         f.flush()
-        segments, _ = _stt_model().transcribe(f.name, beam_size=1, vad_filter=True)
-        return " ".join(s.text.strip() for s in segments).strip()
+        with _stt_lock:
+            segments, _ = _stt_model().transcribe(f.name, beam_size=1, vad_filter=True,
+                                                 condition_on_previous_text=False)
+            return " ".join(s.text.strip() for s in segments).strip()
 
 
 async def transcribe(data: bytes, filename: str) -> str | None:
-    """Speech to text: Whisper on this machine when installed, else OpenAI
-    when a key is set, else nothing."""
+    """Whisper locally; cloud fallback only when local-only mode is disabled."""
     if stt_available():
         try:
             return await asyncio.to_thread(_local_transcribe, data, filename)
         except Exception:
-            pass
+            logger.exception("Local transcription failed")
+    if offline():
+        return None
     import llm
     return await llm.transcribe_audio(data, filename)
 
 
 def _pick(provider: str) -> str | None:
     avail = providers()
+    if offline() and provider not in ("auto", "kokoro", "local"):
+        return None
     if provider != "auto":
         return provider if avail.get(provider) else None
-    for name in ("minimax", "openai", "local"):
-        if avail[name]:
+    for name in (("kokoro", "local") if offline() else ("kokoro", "minimax", "openai", "local")):
+        if avail.get(name):
             return name
     return None
 
@@ -108,6 +128,8 @@ def _pick(provider: str) -> str | None:
 async def list_voices() -> list[dict]:
     """Voices for the active provider; MiniMax's list is fetched and cached."""
     prov = _pick(settings()["provider"])
+    if prov == "kokoro":
+        return [{"id": k, "name": v} for k, v in local_voice.VOICES.items()]
     if prov == "openai":
         return [{"id": v, "name": v} for v in OPENAI_VOICES]
     if prov == "local":
@@ -184,10 +206,16 @@ async def synth(text: str, voice: str | None = None) -> tuple[bytes, str] | None
     s = settings()
     voice = voice or s["voice"]
     first = _pick(s["provider"])
-    order = [first] + [p for p in ("minimax", "openai", "local") if p != first and providers()[p]]
+    # Explicit local choices must not quietly become cloud requests or another voice.
+    order = [first]
+    if not offline(s):
+        order += [p for p in ("kokoro", "minimax", "openai", "local")
+                  if p != first and providers().get(p)]
     for prov in [p for p in order if p]:
         try:
-            if prov == "minimax":
+            if prov == "kokoro":
+                out = await asyncio.to_thread(local_voice.synth, text, voice, s["speed"])
+            elif prov == "minimax":
                 out = await _minimax(text, voice, s["speed"])
             elif prov == "openai":
                 out = await _openai(text, voice, s["speed"])
@@ -196,6 +224,7 @@ async def synth(text: str, voice: str | None = None) -> tuple[bytes, str] | None
             if out:
                 return out
         except Exception:
+            logger.exception("Speech synthesis failed for %s", prov)
             continue
     return None
 
@@ -204,9 +233,9 @@ async def tts_file(text: str, voice: str | None = None) -> dict | None:
     """Synthesise once per (text, voice, speed) and serve it from uploads/tts."""
     s = settings()
     voice = voice or s["voice"]
-    key = hashlib.sha1(f"{s['provider']}|{voice}|{s['speed']}|{text.strip()}".encode()).hexdigest()[:20]
+    key = hashlib.sha256(f"v2|{local_voice.MODEL_VERSION}|{s['provider']}|{offline(s)}|{voice}|{s['speed']}|{text.strip()}".encode()).hexdigest()[:24]
     TTS_DIR.mkdir(parents=True, exist_ok=True)
-    for ext, mime in (("mp3", "audio/mpeg"), ("m4a", "audio/mp4")):
+    for ext, mime in (("mp3", "audio/mpeg"), ("m4a", "audio/mp4"), ("wav", "audio/wav")):
         path = TTS_DIR / f"{key}.{ext}"
         if path.exists():
             return {"url": f"/uploads/tts/{path.name}", "mime": mime, "cached": True}
@@ -214,7 +243,58 @@ async def tts_file(text: str, voice: str | None = None) -> dict | None:
     if not out:
         return None
     data, mime = out
-    ext = "m4a" if mime == "audio/mp4" else "mp3"
+    ext = {"audio/mp4": "m4a", "audio/wav": "wav"}.get(mime, "mp3")
     path = TTS_DIR / f"{key}.{ext}"
-    await asyncio.to_thread(path.write_bytes, data)
+    def write():
+        import tempfile
+        with tempfile.NamedTemporaryFile(dir=TTS_DIR, delete=False) as f:
+            pending = f.name
+            f.write(data)
+        try:
+            os.replace(pending, path)
+        finally:
+            if os.path.exists(pending):
+                os.unlink(pending)
+    await asyncio.to_thread(write)
     return {"url": f"/uploads/tts/{path.name}", "mime": mime, "cached": False}
+
+
+def speech_chunks(text: str, limit: int = 140) -> list[str]:
+    """Bound first-audio latency, preferring sentence or clause boundaries."""
+    text = " ".join(text.split())[:MAX_CHARS]
+    chunks = []
+    while text:
+        # Start with a short complete thought; larger later chunks preserve prosody.
+        size = min(limit, 80) if not chunks else limit
+        sentence = re.search(r'[.!?][”"\']?\s+', text[:size + 1]) if not chunks else None
+        if sentence:
+            cut = sentence.end()
+        elif len(text) <= size:
+            chunks.append(text)
+            break
+        else:
+            window = text[:size + 1]
+            stops = list(re.finditer(r'[.!?;:,][”"\']?\s+', window))
+            cut = stops[-1].end() if stops else window.rfind(" ")
+        if cut < 1:
+            cut = size
+        chunks.append(text[:cut].strip())
+        text = text[cut:].strip()
+    return chunks
+
+
+async def warmup():
+    """Compile/load on entering voice mode, before the first turn."""
+    try:
+        if settings()["provider"] == "kokoro" or _pick(settings()["provider"]) == "kokoro":
+            if not await synth("Ready."):
+                return False
+        if stt_available():
+            def load_stt():
+                with _stt_lock:
+                    _stt_model()
+            await asyncio.to_thread(load_stt)
+        return True
+    except Exception:
+        logger.exception("Voice warmup failed")
+        return False

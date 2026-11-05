@@ -142,7 +142,7 @@ All of these are optional and set up in Settings.
 | **Claude Code** | Delegate writing code, then review the diff | The [Claude Code](https://claude.com/claude-code) CLI |
 | **[MCP servers](docs/mcp.md)** | Use another server's tools | An `mcpServers` block |
 | **Webhooks** | Give any service a URL that reaches the agent | A route in Settings, and a tunnel for services outside your network |
-| **Voice** | Spoken replies and transcribed voice notes | A voice provider key, or `requirements-voice.txt` for local transcription |
+| **Voice** | Spoken replies and transcribed voice notes | [Local neural speech setup](docs/local-voice.md), or a voice provider key |
 
 ## Commands
 
