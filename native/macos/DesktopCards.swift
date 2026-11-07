@@ -17,6 +17,7 @@ final class DesktopCards {
 
     init(store: Store) {
         self.store = store
+        Self.forgetOldPlaces()
         observe()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.panels.values.forEach { $0.keepOnScreen() } }
@@ -55,18 +56,31 @@ final class DesktopCards {
         }
     }
 
+    /// Places saved before cards could be dragged were all on top of the desktop icons, so
+    /// they are dropped once and the cards settle afresh.
+    private static func forgetOldPlaces() {
+        let saved = UserDefaults.standard
+        guard !saved.bool(forKey: "desktopCardsSettled") else { return }
+        for key in saved.dictionaryRepresentation().keys where key.hasPrefix("cardTopLeft.") { saved.removeObject(forKey: key) }
+        saved.set(true, forKey: "desktopCardsSettled")
+    }
+
     /// A new card goes below any card it would cover, and starts a new column to the right
     /// when it reaches the bottom of the screen. Its size is only known once it has drawn.
+    /// Once the columns reach the desktop icons at the right, it goes back over the first
+    /// column instead: a full screen means covering something, and better a card than them.
     private func settle(_ panel: CardPanel) {
         guard let visible = (panel.screen ?? NSScreen.main)?.visibleFrame else { return }
         let others = panels.values.filter { $0 !== panel && $0.isVisible && $0.isPlaced }.map(\.frame)
         var frame = panel.frame
+        let start = NSPoint(x: visible.minX + 24, y: visible.maxY - 24 - frame.height)
         for _ in 0..<40 {
             guard let hit = others.first(where: { $0.insetBy(dx: -8, dy: -8).intersects(frame) }) else { break }
             frame.origin.y = hit.minY - 16 - frame.height
             if frame.minY < visible.minY {
                 frame.origin.x += frame.width + 16
-                frame.origin.y = visible.maxY - 24 - frame.height
+                frame.origin.y = start.y
+                if frame.maxX > visible.maxX { frame.origin = start; break }
             }
         }
         panel.setFrameOrigin(frame.origin)
@@ -103,6 +117,7 @@ final class CardPanel: NSPanel {
         hidesOnDeactivate = false
         // Its buttons answer the first click only in a key window. A panel that does not
         // activate the app takes the keyboard without taking the owner away from their app.
+        // Only a click gets this far: sendEvent keeps a press that turns into a drag to itself.
         becomesKeyOnlyIfNeeded = false
         backgroundColor = .clear
         isOpaque = false
@@ -131,8 +146,6 @@ final class CardPanel: NSPanel {
     /// where the Finder puts the desktop's own icons.
     private func place() {
         let saved = UserDefaults.standard
-        // Places saved before cards could be dragged were all on top of the desktop icons.
-        saved.removeObject(forKey: "cardTopLeft.\(cardKey)")
         if let point = saved.array(forKey: Self.placeKey(cardKey)) as? [Double], point.count == 2 {
             placed = true
             setFrameTopLeftPoint(NSPoint(x: point[0], y: point[1]))
@@ -170,54 +183,70 @@ final class CardPanel: NSPanel {
         if origin != frame.origin { setFrameOrigin(origin) }
     }
 
-    /// Where the pointer is on screen. The window moves under it during a drag, so a position
-    /// taken from the event itself would lag a step behind and shake. A test stands in here.
-    var pointer: () -> NSPoint = { NSEvent.mouseLocation }
-    private var press: (pointer: NSPoint, origin: NSPoint)?
+    private var press: (event: NSEvent, pointer: NSPoint, origin: NSPoint)?
     private var dragging = false
     private static let dragAfter: CGFloat = 4
 
+    /// What a press landed on, as AppKit sees it: a field being typed in, a control that
+    /// follows the pointer itself (a switch flicked, a slider slid), or the card's own drawing.
+    private enum Under { case text, tracking, card }
+    private func under(_ event: NSEvent) -> Under {
+        var view = contentView?.hitTest(event.locationInWindow)
+        while let v = view {
+            if v is NSText || v is NSTextField { return .text }
+            if v is NSControl, !(v is NSButton) { return .tracking }
+            view = v.superview
+        }
+        return .card
+    }
+
     /// Pressing anywhere on the card and moving drags it, whatever is under the pointer: the
     /// card is mostly text and controls, and SwiftUI would otherwise keep the mouse for them.
-    /// A press that does not move is an ordinary click. Typing in a field is left alone.
+    /// The press is held back until the mouse is let go: a click then arrives whole, and a drag
+    /// never arrives at all, so nothing under the pointer fires or takes the keyboard while the
+    /// card moves. Typing in a field and flicking a switch are left to them. Control-click and
+    /// the right button open the card's menu, except over a field, which keeps its own.
     override func sendEvent(_ event: NSEvent) {
         switch event.type {
         case .leftMouseDown:
-            super.sendEvent(event)
-            press = firstResponder is NSText ? nil : (pointer(), frame.origin)
+            let under = under(event)
+            if under == .text { break }
+            if event.modifierFlags.contains(.control) { popUpMenu(event); return }
+            if under == .tracking { break }
+            // The pointer's screen position, not the event's: the window moves under it during
+            // a drag, so a position relative to the window would lag a step behind and shake.
+            press = (event, NSEvent.mouseLocation, frame.origin)
             dragging = false
             return
         case .leftMouseDragged:
             guard let press else { break }
-            let now = pointer()
-            if !dragging, hypot(now.x - press.pointer.x, now.y - press.pointer.y) >= Self.dragAfter {
-                dragging = true
-                // What the press began on lets go of it, away from it, so a button does not fire.
-                if let away = NSEvent.mouseEvent(with: .leftMouseUp, location: NSPoint(x: -10_000, y: -10_000),
-                                                 modifierFlags: event.modifierFlags, timestamp: event.timestamp,
-                                                 windowNumber: windowNumber, context: nil, eventNumber: event.eventNumber,
-                                                 clickCount: 1, pressure: 0) {
-                    super.sendEvent(away)
-                }
-            }
+            let now = NSEvent.mouseLocation
+            if !dragging, hypot(now.x - press.pointer.x, now.y - press.pointer.y) >= Self.dragAfter { dragging = true }
             if dragging {
                 setFrameOrigin(NSPoint(x: press.origin.x + now.x - press.pointer.x, y: press.origin.y + now.y - press.pointer.y))
-                return
             }
+            return
         case .leftMouseUp:
-            press = nil
+            guard let press else { break }
+            self.press = nil
             if dragging {
                 dragging = false
                 keepOnScreen()
                 remember()
                 return
             }
+            super.sendEvent(press.event)
         case .rightMouseDown:
-            if let view = contentView { NSMenu.popUpContextMenu(cardMenu(), with: event, for: view); return }
+            if under(event) != .text { popUpMenu(event); return }
         default:
             break
         }
         super.sendEvent(event)
+    }
+
+    private func popUpMenu(_ event: NSEvent) {
+        guard let view = contentView else { return }
+        NSMenu.popUpContextMenu(cardMenu(), with: event, for: view)
     }
 
     @MainActor func cardMenu() -> NSMenu {
