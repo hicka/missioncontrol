@@ -138,8 +138,23 @@ class Harness:
             return False
         if binding and name in self.always:
             return True
+        return self._profile_permits(key, name)
+
+    def _profile_permits(self, key: str, name: str) -> bool:
         allowed = self.agents[self.owner_of(key)].get("tools")
         return name in self.work and (allowed is None or name in allowed)
+
+    def refusal(self, key: str, name: str) -> str:
+        """Why a tool is refused. A tool the profile has, held back from a session acting
+        on nobody's word, is not a setting anyone can flip: saying 'not enabled' sent the
+        Router to the owner to switch Claude Code back on, twice in a day, when it was on."""
+        binding = self.bound.get(key)
+        if binding and binding["allowed"] is None and name in binding["denied"] and self._profile_permits(key, name):
+            return (f"tool '{name}' is held back: no person asked for this work (it came from an event or a "
+                    f"policy, or follows a task already reported finished), and {name} is not enabled for work "
+                    "nobody asked for. This is not a setting. It comes back when the owner says to go on; "
+                    "report what you would have it do, and wait.")
+        return f"tool '{name}' is not enabled for this agent"
 
     def tools_for(self, key: str) -> list:
         return [d for name, d in self.definitions.items() if self.permits(key, name)]
@@ -215,7 +230,7 @@ class Harness:
                 path = ".".join(map(str, error.absolute_path)) or "arguments"
                 raise ValueError(f"invalid {name} {path}: {error.message}")
             if not self.permits(aid, name):
-                raise ValueError(f"tool '{name}' is not enabled for this agent")
+                raise ValueError(self.refusal(aid, name))
             closing = name == "skill" and args.get("action") in ("complete", "fail")
             key = _call_key(name, args)
             seen = self.failures.get(aid, {}).get(key)

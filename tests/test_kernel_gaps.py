@@ -2109,6 +2109,12 @@ def test_echoes_of_ourselves_only_reach_someone_on_that_thread(monkeypatch):
         who = asyncio.run(github.classify(evt))
         assert who["echo"] and not who["from_owner"]
         assert github.routing(evt, who)["followers_only"]
+    # Our own account is the team's hands; another bot is just another bot.
+    assert asyncio.run(github.classify(bot))["ours"] and github.routing(bot, asyncio.run(github.classify(bot)))["ours"]
+    assert not asyncio.run(github.classify(dependabot))["ours"]
+    assert "ours" not in github.routing(dependabot, asyncio.run(github.classify(dependabot)))
+    ours_ci = {"kind": "ci", "repo": "a/b", "actor": "acme-bot"}
+    assert github.routing(ours_ci, asyncio.run(github.classify(ours_ci))) == {"ours": True}
     # A PR an agent opened is still a PR that needs a reviewer.
     opened = {**bot, "comment_id": None, "needs_decision": True, "review_worthy": True}
     routing = github.routing(opened, asyncio.run(github.classify(opened)))
@@ -2152,6 +2158,35 @@ def test_a_merge_ends_the_finished_worker_on_it_without_waking_anyone(isolated, 
         await asyncio.sleep(0.05)
         assert store.session_get(row["id"])["status"] == "ended"
         assert len(model.worker_calls) == calls and len(model.router_calls) == decisions
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_the_teams_own_review_on_an_asked_for_pr_carries_the_owners_ask_on(isolated, monkeypatch):
+    """The owner asked for the fix; the PR, its review by our own reviewer and the follow-ups
+    are one piece of work. Asking the owner for leave to finish it, or telling them Claude
+    Code is switched off when a finished task had simply stood down, is what this ends."""
+    model = Hold(monkeypatch, worker=[call("report", status="ready", summary="Opened #9."), say("NO_REPLY"), say("NO_REPLY")])
+
+    async def main():
+        o = make(monkeypatch)
+        row = await o.workers.spawn(second(o), "t", "", [asked(o)], follow=["github:a/b#9"])
+        await until(lambda: store.session_get(row["id"])["strength"] == "inferred")
+        assert store.session_get(row["id"])["meta"]["was_asked"]
+        assert not o.harness.permits(row["id"], "claude_code")
+        why = o.harness.refusal(row["id"], "claude_code")
+        assert "held back" in why and "not a setting" in why and "not enabled for this agent" not in why
+        # A stranger's comment wakes it with nothing.
+        await o.outside_event("github", "github:a/b#9", "Comment on #9 by passerby: please also do X", actor="passerby",
+                              routing={"followers_only": True})
+        await until(lambda: len(model.worker_calls) >= 2)
+        assert store.session_get(row["id"])["strength"] == "inferred"
+        # Our own reviewer's verdict carries the owner's ask on, and the tools with it.
+        await o.outside_event("github", "github:a/b#9", "Review on #9 by acme-bot: two small fixes", actor="acme-bot",
+                              routing={"followers_only": True, "ours": True})
+        await until(lambda: store.session_get(row["id"])["strength"] == "explicit")
+        assert o.harness.permits(row["id"], "claude_code")
+        await until(lambda: len(model.worker_calls) >= 3)
         await wind_down(o)
     asyncio.run(main())
 

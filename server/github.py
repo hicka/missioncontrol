@@ -392,19 +392,27 @@ async def classify(evt: dict) -> dict:
     """Who this event really came from. from_owner is the owner speaking. echo is us
     hearing ourselves, or a bot's boilerplate, which is only of interest to a Worker
     already on that thread: 6 of 9 GitHub events the Router read were this, at 26,000
-    tokens each, and each ended in it deciding to do nothing."""
-    actor, out = evt.get("actor") or "", {"from_owner": False, "echo": False, "under_owner": False}
-    # A failed run is news whoever pushed the commit.
-    if not actor or evt.get("kind") == "ci":
+    tokens each, and each ended in it deciding to do nothing. ours is the team's own
+    hands: the agents' account, or an agent acting through the owner's, as against a
+    stranger's or another bot's."""
+    actor, out = evt.get("actor") or "", {"from_owner": False, "echo": False, "under_owner": False, "ours": False}
+    if not actor:
         return out
-    if actor.endswith("[bot]") or actor == await bot_login():
+    bot = await bot_login()
+    # A failed run is news whoever pushed the commit.
+    if evt.get("kind") == "ci":
+        out["ours"] = bool(bot) and actor == bot
+        return out
+    if actor.endswith("[bot]") or actor == bot:
         out["echo"] = True
+        out["ours"] = bool(bot) and actor == bot
     elif actor == await owner_login():
         if evt.get("comment_id"):
             out["from_owner"] = await said_by_owner(evt)
             out["echo"] = out["under_owner"] = not out["from_owner"]
         else:
             out["echo"] = out["under_owner"] = await _agent_acted(evt)
+        out["ours"] = out["under_owner"]
     return out
 
 
@@ -414,7 +422,7 @@ def routing(evt: dict, who: dict) -> dict:
     echo = who["echo"] and not evt.get("review_worthy")
     flags = {"followers_only": (evt.get("followers_only") or echo) and not who["from_owner"],
              "quiet": evt.get("quiet"), "needs_decision": evt.get("needs_decision") and not echo,
-             "closes": evt.get("closes")}
+             "closes": evt.get("closes"), "ours": who.get("ours") and not who["from_owner"]}
     return {k: True for k, v in flags.items() if v}
 
 

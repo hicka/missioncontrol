@@ -243,8 +243,16 @@ class Intake:
             calm = meta.get("quiet") and follower["status"] not in ACTIVE
             # Not woken, it is not being asked anything. Its authority should not wait there
             # for the next stranger's comment to wake it with.
-            await self.deliver(trigger, follower["id"], wakes=not (held or calm),
-                               promote=follower.get("sub_mode") != "context" and not calm)
+            wakes, mine = not (held or calm), follower.get("sub_mode") != "context"
+            # The team's own hands on the thread, a reviewer's verdict or a run on its own
+            # push, carry on what the owner asked for: a task they asked for goes on being
+            # that after a reviewer has been round, as it does when the report comes through
+            # the Router. Otherwise it would come back to the owner for leave to finish what
+            # they already asked. A stranger's comment gives it nothing, and a task nobody
+            # asked for has nothing to get back.
+            if wakes and mine and meta.get("ours") and (follower.get("meta") or {}).get("was_asked"):
+                await self.orch.workers.promote(follower["id"])
+            await self.deliver(trigger, follower["id"], wakes=wakes, promote=mine and not calm)
 
     async def _pass_through(self, trigger: dict, followers: list[dict]):
         names = ", ".join(s["id"] for s in followers)
