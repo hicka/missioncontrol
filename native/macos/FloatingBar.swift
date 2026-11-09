@@ -72,6 +72,19 @@ extension Store {
             }
             return BarStatus(pulse: .thinking, title: "Thinking…")
         }
+        // Work the conversations started, in the words its card uses: what it is on this
+        // moment, who has it, and when it is the owner it waits for.
+        let live = workRefs.compactMap { workModels[$0.id]?.task }.filter(\.live)
+        if let needs = live.first(where: { $0.phase == "needs_you" }) {
+            return BarStatus(pulse: .attention, title: "\(needs.agentName) needs you", detail: clip(needs.waitingText, 52))
+        }
+        if let task = live.first(where: { ["working", "fixing", "thinking"].contains($0.phase) }) ?? live.first {
+            let moving = ["working", "fixing", "thinking"].contains(task.phase)
+            let others = live.count > 1 ? " · \(live.count - 1) more" : ""
+            return BarStatus(pulse: moving ? (task.phase == "thinking" ? .thinking : .working) : .waiting,
+                             title: clip(task.phaseLine, 46), detail: "\(task.agentName) · \(clip(task.title, 34))" + others,
+                             since: moving ? task.steps.last(where: { $0.status == "running" })?.ts : nil)
+        }
         let working = workers.filter { $0.status.str == "working" }
         // A task waiting on a build, a watch or a reply is open work too. Left out, the bar
         // said "Ask anything" over it, and the owner read that as nothing happening.
@@ -656,7 +669,7 @@ private struct RestBar: View {
                         .contentTransition(.symbolEffect(.replace))
                 }
                 VStack(alignment: .leading, spacing: 0) {
-                    if status.pulse == .thinking {
+                    if status.pulse == .thinking || status.pulse == .working {
                         ShimmerText(text: status.title)
                     } else {
                         Text(status.title).font(.system(size: 13, weight: .medium)).foregroundStyle(.white).lineLimit(1)
@@ -733,7 +746,8 @@ private struct OpenBar: View {
                 } else {
                     if let away = AwayLine.since(store) { AwayLine(since: away, bar: bar); divider }
                     if !store.inbox.isEmpty { NeedsStrip(bar: bar); divider }
-                    if !openWorkers.isEmpty { TaskStrip(workers: openWorkers); divider }
+                    if !liveWork.isEmpty { WorkStrip(refs: liveWork); divider }
+                    else if !openWorkers.isEmpty { TaskStrip(workers: openWorkers); divider }
                     if let id = store.leadThread { Conversation(model: store.thread(id), threadID: id) }
                 }
             }
@@ -748,6 +762,7 @@ private struct OpenBar: View {
 
     private var divider: some View { Rectangle().fill(.white.opacity(0.08)).frame(height: 0.5) }
     private var openWorkers: [JSON] { store.workers.filter { ["working", "waiting", "blocked"].contains($0.status.str) } }
+    private var liveWork: [WorkRef] { store.workRefs.filter { store.workModels[$0.id]?.task.live ?? false } }
 
     private var composer: some View {
         HStack(alignment: .bottom, spacing: 10) {
@@ -926,6 +941,24 @@ private struct ReviewPane: View {
         if prior.identical.flag { return "Identical to the command you \(verb) at \(time). Running it runs it again." }
         let lines = prior.diff.list.map(\.str).joined(separator: "\n")
         return "Differs from the command you \(verb) at \(time):\n\(lines.isEmpty ? "only whitespace changed" : lines)"
+    }
+}
+
+/// The work under way, as the same cards the conversation draws, on the bar's dark glass.
+private struct WorkStrip: View {
+    @Environment(Store.self) private var store
+    let refs: [WorkRef]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(refs.suffix(2)) { ref in WorkCard(id: ref.id, indent: 0, width: 580) }
+            if refs.count > 2 {
+                Button("and \(refs.count - 2) more") { store.go(.tasks) }
+                    .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.white.opacity(0.55)).padding(.top, 8)
+            }
+        }
+        .padding(.horizontal, 10).padding(.bottom, 10)
+        .environment(\.colorScheme, .dark)
     }
 }
 

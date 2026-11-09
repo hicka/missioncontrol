@@ -394,13 +394,14 @@ struct Shimmer: View {
 /// Three dots that rise in turn: the model is reading or deciding, and has not said yet.
 struct ThinkingDots: View {
     var tint: Color = .secondary
+    var size: CGFloat = 5
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
             let time = context.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 3.5) {
+            HStack(spacing: size * 0.6) {
                 ForEach(0..<3, id: \.self) { index in
                     let wave = max(0, sin(time * 5.2 - Double(index) * 0.75))
-                    Circle().fill(tint.opacity(0.35 + 0.65 * wave)).frame(width: 5, height: 5).offset(y: -2.5 * wave)
+                    Circle().fill(tint.opacity(0.35 + 0.65 * wave)).frame(width: size, height: size).offset(y: -size * 0.5 * wave)
                 }
             }
         }
@@ -413,7 +414,7 @@ private struct ThinkingRow: View {
     let still: Bool
     var body: some View {
         HStack(spacing: 9) {
-            Group { if still { Circle().fill(Color.secondary).frame(width: 5, height: 5) } else { ThinkingDots() } }
+            Group { if still { Circle().fill(Color.secondary).frame(width: 5, height: 5) } else { ThinkingDots(size: 3.4) } }
                 .frame(width: 14, alignment: .center)
             Text("Thinking").font(.system(size: 12.5)).foregroundStyle(.tertiary)
         }
