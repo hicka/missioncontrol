@@ -140,7 +140,9 @@ struct WorkCard: View {
 
     private func head(_ task: WorkTask, open: Bool) -> some View {
         HStack(alignment: .center, spacing: 10) {
-            PhaseMark(phase: task.phase, outcome: task.outcome, tint: tint(task))
+            // While it runs, the one doing it; once over, how it ended.
+            if task.live { AgentBadge(agent: store.agent(task.agent), size: 30) }
+            else { PhaseMark(phase: task.phase, outcome: task.outcome, tint: tint(task)) }
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: task.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                 HStack(spacing: 5) {

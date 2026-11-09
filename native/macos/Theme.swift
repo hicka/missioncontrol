@@ -62,20 +62,19 @@ struct Pill: View {
     }
 }
 
-/// An agent's profile: its colour and initial.
+/// A profile, as its presence: a body of its colour that moves the way the profile is.
+/// `still` is for a picture of a profile rather than the profile itself, such as the one
+/// being edited in Settings.
 struct AgentBadge: View {
+    @Environment(Store.self) private var store
     let agent: Agent?
     var size: CGFloat = 26
+    var still = false
     var body: some View {
-        // A near-black profile colour would vanish on a dark background.
-        let raw = agent?.color ?? ""
-        let tint = raw.lowercased().hasPrefix("#1d1d") ? Color.primary : color(hex: raw, fallback: .gray)
-        Text(String((agent?.name ?? "?").prefix(1)).uppercased())
-            .font(.system(size: size * 0.46, weight: .semibold, design: .rounded))
-            .foregroundStyle(tint)
-            .frame(width: size, height: size)
-            .background(tint.opacity(0.16), in: Circle())
-            .accessibilityHidden(true)
+        let id = agent?.id ?? ""
+        Presence(color: presenceColor(agent?.color ?? ""), mood: still ? .idle : store.mood(id), size: size,
+                 seed: id.unicodeScalars.reduce(0) { $0 &* 31 &+ Int($1.value) })
+            .help(still || agent == nil ? "" : "\(agent?.name ?? ""): \(Presence.spoken(store.mood(id)).lowercased())")
     }
 }
 

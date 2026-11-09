@@ -553,7 +553,7 @@ private struct TeamChip: View {
         let busy = store.isBusy(agent.id)
         Button { store.go(.chat("dm:\(agent.id)")) } label: {
             HStack(spacing: 9) {
-                AgentBadge(agent: agent, size: 24)
+                AgentBadge(agent: agent, size: 28)
                 VStack(alignment: .leading, spacing: 0) {
                     Text(verbatim: agent.name).font(.system(size: 12.5, weight: .medium)).lineLimit(1)
                     if busy {
@@ -561,7 +561,6 @@ private struct TeamChip: View {
                     }
                 }
                 Spacer(minLength: 0)
-                if busy { Spinner(size: 10) }
             }
             .padding(.horizontal, 10).frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
             .background(Color.primary.opacity(hovering ? 0.07 : 0.035), in: RoundedRectangle(cornerRadius: 10, style: .continuous))

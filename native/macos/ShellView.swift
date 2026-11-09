@@ -110,14 +110,14 @@ private struct ThreadRow: View {
     var body: some View {
         let agentID = thread.agent.str
         HStack(spacing: 8) {
-            if thread.kind.str == "dm" { AgentBadge(agent: store.agent(agentID), size: 20) } else { Image(systemName: "person.3").frame(width: 20) }
+            if thread.kind.str == "dm" { AgentBadge(agent: store.agent(agentID), size: 24) } else { Image(systemName: "person.3").frame(width: 24) }
             VStack(alignment: .leading, spacing: 0) {
                 Text(thread.name.str).font(.system(size: 13)).lineLimit(1)
                 if store.isBusy(agentID) { Text(verbatim: store.doing(agentID)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1) }
             }
             Spacer()
+            // Busy shows in the presence itself, so only unread needs a mark of its own.
             if store.unread.contains(thread.id) { Circle().fill(Color.accentColor).frame(width: 7, height: 7).accessibilityLabel("Unread") }
-            else if store.isBusy(agentID) { Spinner(size: 10).accessibilityLabel("Working") }
         }
     }
 }

@@ -173,6 +173,8 @@ final class Store {
     @ObservationIgnored private var workTask: Task<Void, Never>?
 
     var states: [String: String] = [:]
+    /// When a profile's task last finished, for as long as it shows it.
+    var cheered: [String: Double] = [:]
     var tools: [String: String] = [:]
     var streams: [String: StreamText] = [:]
     var typing: Set<String> = []
@@ -421,7 +423,10 @@ final class Store {
         guard let api, let reply = try? await api.get("/api/work?limit=30") else { return }
         let tasks = reply.tasks.list.map(WorkTask.init)
         for task in tasks {
-            if let model = workModels[task.id] { if model.task != task { model.task = task } }
+            if let model = workModels[task.id] {
+                if model.task.live, !task.live, task.outcome != "failed" { cheer(task.agent) }
+                if model.task != task { model.task = task }
+            }
             else { workModels[task.id] = WorkModel(task) }
         }
         let known = Set(tasks.map(\.id))
@@ -455,6 +460,32 @@ final class Store {
     func workSize(in thread: String) -> Int {
         workRefs.filter { $0.thread == thread }.compactMap { workModels[$0.id]?.task }
             .reduce(0) { $0 &+ $1.steps.count &* 31 &+ $1.phase.count &+ ($1.live ? 7 : 0) }
+    }
+    /// How a profile is: what its task is doing, then what it is doing itself.
+    func mood(_ agentID: String) -> Mood {
+        guard link || !live else { return .offline }
+        let tasks = workRefs.compactMap { workModels[$0.id]?.task }.filter { $0.live && $0.agent == agentID }
+        if tasks.contains(where: { $0.phase == "needs_you" }) { return .needsYou }
+        if tasks.contains(where: { $0.phase == "fixing" }) { return .fixing }
+        if tasks.contains(where: { $0.phase == "working" }) { return .working }
+        if tasks.contains(where: { $0.phase == "thinking" }) { return .thinking }
+        switch states[agentID] ?? "idle" {
+        case "thinking": return .thinking
+        case "doing": return .working
+        default: break
+        }
+        if tasks.contains(where: { ["waiting", "queued"].contains($0.phase) }) { return .waiting }
+        if cheered[agentID] != nil { return .happy }
+        return .idle
+    }
+    /// A task of this profile's just finished: it shows that for a moment.
+    private func cheer(_ agentID: String) {
+        let at = Date().timeIntervalSince1970
+        cheered[agentID] = at
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            if self?.cheered[agentID] == at { self?.cheered[agentID] = nil }
+        }
     }
     /// What a profile is on right now, in words: the step it named, or how it is thinking.
     func doing(_ agentID: String) -> String {

@@ -204,7 +204,7 @@ private struct SettingsProfileEditor: View {
     private var identity: some View {
         Section {
             HStack(spacing: 10) {
-                AgentBadge(agent: Agent(.object(["id": .string(existing?.id ?? "new"), "name": .string(name), "color": .string(color)])), size: 34)
+                AgentBadge(agent: Agent(.object(["id": .string(existing?.id ?? "new"), "name": .string(name), "color": .string(color)])), size: 34, still: true)
                 TextField("Name", text: $name, prompt: Text("Name, e.g. QA Engineer"))
             }
             swatchRow
