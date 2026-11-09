@@ -797,6 +797,13 @@ class Worker(sess.Session):
             fields["status"] = "ended" if one_shot else "idle" if status == "handback" else "failed"
         elif status == "waiting":
             fields["status"] = "waiting"
+        # The task first, then the session: anyone who sees the session as blocked or done
+        # and looks at its task in the same breath must not find it still running.
+        marked = self.mission and {"ready": "completed", "dropped": "completed", "failed": "failed",
+                                   "blocked": "waiting", "waiting": "waiting", "handback": "completed"}.get(status)
+        if marked:
+            await asyncio.to_thread(runtime_store.mission_set, self.mission, marked,
+                                    "Nothing needed doing." if status == "dropped" else summary)
         # Authority lasts as long as the task. A finished Worker stays around for its
         # threads, and a comment waking it is not the owner asking it for anything.
         self.row = await asyncio.to_thread(store.session_set, self.id, **fields) or self.row
@@ -806,13 +813,8 @@ class Worker(sess.Session):
             # It waits for its answer, but the job's next firing is not that answer.
             for sub in await asyncio.to_thread(store.subscriptions_of, self.id):
                 await asyncio.to_thread(store.unsubscribe, sub["thread"], self.id)
-        if self.mission:
-            state = {"ready": "completed", "dropped": "completed", "failed": "failed", "blocked": "waiting",
-                     "waiting": "waiting", "handback": "completed"}.get(status)
-            if state:
-                await asyncio.to_thread(runtime_store.mission_set, self.mission, state,
-                                        "Nothing needed doing." if status == "dropped" else summary)
-                await self.orch._emit({"type": "mission_updated"})
+        if marked:
+            await self.orch._emit({"type": "mission_updated"})
         await self.orch._emit({"type": "session_updated", "session": self.id})
         if row["direct"] and (status in WAKING_REPORTS or status == "progress"):
             await self.orch.deliver(self.orch.direct_thread(self.profile),
