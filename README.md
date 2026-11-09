@@ -194,6 +194,20 @@ fleet port (8902) on a LAN or Tailscale, never on the open internet.
 companion iOS app that connects to the server with a URL and a token. There is no public
 build yet, so you build and sign your own.
 
+An app that registers with Apple directly (a native build, rather than one that goes through
+Expo) is woken by the server itself, which needs an APNs key of your own in `settings.yaml`:
+
+```yaml
+push:
+  apns:
+    key_file: ~/keys/AuthKey_ABC123DEFG.p8   # from your Apple developer account
+    key_id: ABC123DEFG
+    team_id: ABCDE12345
+    topic: com.yourname.missioncontrol       # the app's bundle id
+```
+
+Without it such an app still works while open; it is just not notified.
+
 ## Project layout
 
 | Path | What it holds |

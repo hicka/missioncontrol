@@ -1481,7 +1481,10 @@ async def usage(days: int = 7):
 # ── Phones: push tokens, no account in between ──────────────────────────
 
 class DeviceBody(BaseModel):
-    expo_push_token: str
+    expo_push_token: str = ""
+    # The native iPhone app's own token, which Apple delivers to directly.
+    apns_token: str = ""
+    sandbox: bool = False
     name: str = "phone"
 
 
@@ -1492,6 +1495,12 @@ async def devices_list():
 
 @app.post("/api/devices")
 async def devices_add(body: DeviceBody):
+    if body.apns_token:
+        import re
+        if not re.fullmatch(r"[0-9a-fA-F]{32,200}", body.apns_token):
+            return {"ok": False, "error": "that is not an Apple device token"}
+        rows = push_mod.register(body.apns_token.lower(), body.name, "apns", body.sandbox)
+        return {"ok": True, "devices": rows, "delivers": push_mod.apns_settings() is not None}
     if not body.expo_push_token.startswith("ExponentPushToken["):
         return {"ok": False, "error": "that is not an Expo push token"}
     return {"ok": True, "devices": push_mod.register(body.expo_push_token, body.name)}
