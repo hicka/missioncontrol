@@ -63,32 +63,36 @@
       </div>
       <button class="icon-btn side-close" id="side-close" aria-label="Close navigation"><svg class="i"><use href="#i-x"/></svg></button>
     </div>
-    <div class="side-actions">
-      <button class="new-task" id="new-task-btn"><svg class="i"><use href="#i-plus"/></svg><span>New task</span></button>
-      <button class="icon-btn side-search" id="palette-btn" aria-label="Search and commands" title="Search and commands"><svg class="i"><use href="#i-search"/></svg><kbd class="shortcut-key">⌘K</kbd></button>
-    </div>
-    <nav id="deck-nav" aria-label="Workspace">
+    <!-- What is used every day stays in view. The rest is one click further, under More. -->
+    <nav id="deck-nav" class="side-nav" aria-label="Workspace">
       <button data-deck="home" class="active"><svg class="i"><use href="#i-home"/></svg><span>Home</span></button>
       <button data-deck="inbox"><svg class="i"><use href="#i-inbox"/></svg><span>Inbox</span><b id="nav-inbox-count" class="nav-count attention hidden">0</b></button>
       <button data-deck="missions"><svg class="i"><use href="#i-tasks"/></svg><span>Tasks</span><b id="nav-mission-count" class="nav-count hidden">0</b></button>
-      <button data-deck="activity"><svg class="i"><use href="#i-bolt"/></svg><span>Activity</span><b id="nav-activity-count" class="nav-count hidden">0</b></button>
-      <button data-deck="schedule"><svg class="i"><use href="#i-clock"/></svg><span>Schedule</span><b id="nav-watch-count" class="nav-count hidden">0</b></button>
-      <button data-deck="knowledge"><svg class="i"><use href="#i-book"/></svg><span>Knowledge</span></button>
-      <button data-deck="evolution"><svg class="i"><use href="#i-growth"/></svg><span>Evolution</span><b id="nav-evolution-mark" class="nav-count hidden"></b></button>
     </nav>
-    <div class="side-section">
-      <span>Agent</span>
-      <button class="icon-btn new-chat" title="New profile" aria-label="Create profile"><svg class="i"><use href="#i-plus"/></svg></button>
+    <div id="side-scroll">
+      <div class="side-section">
+        <span>Chats</span>
+        <button class="icon-btn" id="search-toggle" title="Find a conversation or a message" aria-label="Find a conversation or a message" aria-expanded="false"><svg class="i"><use href="#i-search"/></svg></button>
+        <button class="icon-btn new-chat" title="New profile" aria-label="Create profile"><svg class="i"><use href="#i-plus"/></svg></button>
+      </div>
+      <div class="search-wrap hidden" id="search-wrap">
+        <svg class="i search-ico"><use href="#i-search"/></svg>
+        <input id="search" type="search" placeholder="Find a conversation" aria-label="Search conversations" autocomplete="off">
+      </div>
+      <nav id="convo-list" aria-label="Chats"></nav>
+      <button class="side-section more-toggle" id="more-toggle" aria-expanded="false" aria-controls="more-nav"><span>More</span><svg class="i"><use href="#i-chev"/></svg></button>
+      <nav id="more-nav" class="side-nav hidden" aria-label="More">
+        <button data-deck="activity"><svg class="i"><use href="#i-bolt"/></svg><span>Activity</span><b id="nav-activity-count" class="nav-count hidden">0</b></button>
+        <button data-deck="schedule"><svg class="i"><use href="#i-clock"/></svg><span>Schedule</span><b id="nav-watch-count" class="nav-count hidden">0</b></button>
+        <button data-deck="knowledge"><svg class="i"><use href="#i-book"/></svg><span>Knowledge</span></button>
+        <button data-deck="evolution"><svg class="i"><use href="#i-growth"/></svg><span>Evolution</span><b id="nav-evolution-mark" class="nav-count hidden"></b></button>
+      </nav>
     </div>
-    <div class="search-wrap">
-      <svg class="i search-ico"><use href="#i-search"/></svg>
-      <input id="search" type="search" placeholder="Find a conversation" aria-label="Search conversations" autocomplete="off">
-    </div>
-    <nav id="convo-list" aria-label="Conversations"></nav>
     <div class="side-foot">
       <div class="profile">
-        <span class="profile-badge" id="profile-badge"></span>
-        <div class="profile-text"><span id="profile-name"></span><span id="link-dot">connecting</span></div>
+        <span id="link-dot" title="Connecting"></span>
+        <span id="profile-name">Connecting…</span>
+        <button class="icon-btn" id="palette-btn" aria-label="Search and commands" title="Search and commands"><svg class="i"><use href="#i-search"/></svg></button>
         <button class="icon-btn" id="theme-btn" aria-label="Theme" title="Theme"><svg class="i"><use href="#i-auto"/></svg></button>
         <button class="icon-btn" id="settings-btn" aria-label="Settings" title="Settings"><svg class="i"><use href="#i-settings"/></svg><span id="settings-dot" class="side-dot hidden"></span></button>
       </div>
@@ -124,7 +128,7 @@
           <button id="panel-btn" class="icon-btn" title="Profile" aria-label="Show profile"><svg class="i"><use href="#i-panel"/></svg></button>
         </div>
       </header>
-      <div id="scroll"><div id="messages"></div></div>
+      <div id="scroll"><div id="messages" data-work-zone="chat"></div></div>
       <button id="to-latest" class="hidden" title="Jump to the latest messages">Latest <svg class="i"><use href="#i-up"/></svg></button>
       <div id="voice-panel" class="hidden">
         <div class="voice-orb-wrap"><div class="voice-ring"></div><div class="voice-orb" id="voice-orb"></div></div>
@@ -139,14 +143,14 @@
       </div>
       <footer id="composer">
         <input type="file" id="file-input" multiple class="hidden">
+        <!-- One line until there is more to say: attach, the words, send. -->
         <div class="input-pill">
+          <div id="composer-options" class="composer-options hidden" role="listbox" aria-label="Suggestions"></div>
           <div id="pending-files" class="hidden"></div>
-          <textarea id="input" rows="1" placeholder="Message"></textarea>
           <div class="input-row">
             <button class="icon-btn" id="attach-btn" title="Attach a file" aria-label="Attach a file"><svg class="i"><use href="#i-clip"/></svg></button>
-            <span class="input-hint">Enter to send · Shift Enter for a new line</span>
-            <button class="icon-btn" id="mic-btn" title="Voice mode" aria-label="Voice mode"><svg class="i"><use href="#i-mic"/></svg></button>
-            <button class="send-btn hidden" id="send-btn" title="Send" aria-label="Send"><svg class="i"><use href="#i-up"/></svg></button>
+            <textarea id="input" rows="1" placeholder="Message"></textarea>
+            <button class="send-btn idle" id="send-btn" title="Send (Enter). Shift Enter for a new line" aria-label="Send"><svg class="i"><use href="#i-up"/></svg></button>
           </div>
         </div>
       </footer>
@@ -788,6 +792,8 @@
 
 
 <div id="browser-auth-alert" class="hidden" role="status"><span id="browser-auth-alert-text"></span><button class="btn primary" id="browser-auth-review">Review sign-in</button></div>
+<script src="/static/presence.js"></script>
+<script src="/static/work.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/browser.js"></script>
 <script src="/static/deck.js"></script>

@@ -69,12 +69,21 @@
   }
 
   /* ---------- routing ---------- */
+  const MORE = ["activity", "schedule", "knowledge", "evolution", "modules"];
   function setNav(view) {
-    document.querySelectorAll("#deck-nav button[data-deck]").forEach((b) => {
+    document.querySelectorAll("#sidebar button[data-deck]").forEach((b) => {
       const on = b.dataset.deck === view;
       b.classList.toggle("active", on);
       b.setAttribute("aria-current", on ? "page" : "false");
     });
+    applyMore();
+  }
+  // More stays folded until asked for, and opens by itself for the view it holds.
+  const moreWanted = () => { try { return localStorage.getItem("mc-more") === "open"; } catch { return false; } };
+  function applyMore() {
+    const open = moreWanted() || MORE.includes(D.view) || !!D.moreNeeds;
+    $("#more-nav").classList.toggle("hidden", !open);
+    $("#more-toggle").setAttribute("aria-expanded", String(open));
   }
   function show(view) {
     if (view === "overview" || view === "network") view = "home";
@@ -171,17 +180,21 @@
     const part = hr < 5 ? "Working late" : hr < 12 ? "Good morning" : hr < 18 ? "Good afternoon" : "Good evening";
     return firstName() && firstName() !== "You" ? `${part}, ${firstName()}` : part;
   }
+  // The first screen: somewhere to hand over a task, what needs the owner, the work
+  // under way as it happens, and who is on the team. Counts and charts live on
+  // their own screens.
   function homeFrame() {
     return `<section class="home-hero">
         <div class="home-glow" id="home-glow"></div>
         <h2 class="reveal">${h(greeting())}</h2>
         <div class="home-sub reveal" id="home-sub"></div>
         <div class="composer-lg reveal">
+          <div id="home-options" class="composer-options hidden" role="listbox" aria-label="Suggestions"></div>
           <textarea id="home-input" rows="2" placeholder="Hand over a task, or ask anything…" aria-label="New task"></textarea>
           <div class="composer-row">
             <span class="route-chip" id="home-route"></span>
-            <span class="hint">Enter to send · @ to choose who · / for commands</span>
-            <button class="round-send" id="home-send" aria-label="Send" disabled>${icon("up")}</button>
+            <span class="spacer"></span>
+            <button class="round-send" id="home-send" aria-label="Send" title="Send" disabled>${icon("up")}</button>
           </div>
         </div>
         <div class="suggestions reveal">
@@ -192,20 +205,14 @@
         <div id="home-feedback"></div>
       </section>
       <section class="section" id="home-needs"></section>
-      <section class="section">
-        <div class="section-head"><h3>Profiles</h3><span class="count" id="home-team-count"></span></div>
-        <div class="team-grid" id="home-team"></div>
+      <section class="section hidden" id="home-work-section">
+        <div class="section-head"><h3>Under way</h3><span class="spacer"></span><button class="link" data-act="show" data-view="missions">All tasks ${icon("chev")}</button></div>
+        <div id="home-work" data-work-zone="home"></div>
       </section>
-      <div class="home-grid">
-        <section class="section" style="margin-top:0">
-          <div class="section-head"><h3>In progress</h3><span class="spacer"></span><button class="link" data-act="show" data-view="missions">All tasks ${icon("chev")}</button></div>
-          <div id="home-progress"></div>
-        </section>
-        <section class="section" style="margin-top:0">
-          <div class="section-head"><h3>Getting better</h3><span class="spacer"></span><button class="link" data-act="show" data-view="evolution">Details ${icon("chev")}</button></div>
-          <div id="home-growth"></div>
-        </section>
-      </div>`;
+      <section class="section">
+        <div class="section-head"><h3>Team</h3><span class="count" id="home-team-count"></span></div>
+        <div class="team-strip" id="home-team"></div>
+      </section>`;
   }
   function busyAgents() {
     return Object.entries(D.data.agents || {}).filter(([, v]) => v.state && v.state !== "idle").map(([id]) => id);
@@ -244,23 +251,38 @@
           <div class="item-sub">${h(k.label)}${i.agent && i.agent !== "*" ? ` · ${h(agentName(i.agent))}` : ""}</div></div>
           <div class="item-meta">${h(ago(i.ts))}${icon("chev")}</div></button>`;
       }).join("")}${inbox.length > 4 ? `<button class="item" data-act="show" data-view="inbox"><div class="item-main"><div class="item-sub">and ${inbox.length - 4} more</div></div></button>` : ""}</div>` : "";
-    // team
+    updateHomeWork(true);
+    updateTeam();
+  }
+  // Work in flight, drawn the way the conversation draws it. Nothing here when all is quiet.
+  function updateHomeWork(layout) {
+    const box = $("#home-work");
+    if (!box) return;
+    const live = Work.live();
+    const ids = live.map((t) => t.id).join(",");
+    $("#home-work-section").classList.toggle("hidden", !live.length);
+    if (layout && box.dataset.ids !== ids) {
+      box.dataset.ids = ids;
+      Work.keepFocus(() => { box.innerHTML = live.map((t) => Work.card(t, { flush: true })).join(""); });
+    } else Work.paint(box);
+  }
+  // The team in a line: who they are and whether they are on something. A profile's
+  // chat is a click away, and its numbers are in its own panel.
+  function updateTeam() {
+    const box = $("#home-team");
+    if (!box) return;
     const agents = Object.values(S.agents).sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
     $("#home-team-count").textContent = agents.length;
-    $("#home-team").innerHTML = agents.map(agentCard).join("") +
-      `<button class="agent-card add" data-act="new-agent">${icon("plus")}<span>Add a profile</span></button>`;
-    // in progress
-    const open = openMissions();
-    const running = (D.data.executions || []).filter((e) => e.status === "running" && e.kind === "tool" && !open.some((m) => m.id === e.mission));
-    const rows = [
-      ...running.slice(0, 4).map((e) => `<button class="item" data-act="execution" data-id="${h(e.id)}">${faceSVG(S.agents[e.agent], 26, S.agentState[e.agent] || "doing")}
-        <div class="item-main"><div class="item-title">${h(agentName(e.agent))} is running ${h(e.name.replaceAll("_", " "))}</div>
-        <div class="item-sub">${h(toolDetail(e))}</div></div><div class="item-meta">${h(ago(e.ts))}</div></button>`),
-      ...open.slice(0, 6).map(taskRow),
-    ];
-    $("#home-progress").innerHTML = rows.length ? `<div class="list card">${rows.join("")}</div>`
-      : `<div class="card"><div class="empty compact"><span>Nothing in flight. Hand over a task above and it shows up here.</span></div></div>`;
-    $("#home-growth").innerHTML = growthCard(evo);
+    box.innerHTML = agents.map(teamChip).join("") +
+      `<button class="team-chip add" data-act="new-agent">${icon("plus")}<span>Add a profile</span></button>`;
+  }
+  function teamChip(a) {
+    const busy = Work.busy(a.id);
+    const doing = busy ? Work.doing(a.id) : "";
+    return `<button class="team-chip${busy ? " busy" : ""}" data-act="chat" data-agent="${h(a.id)}" title="Opens the chat with ${h(a.name)}">
+      ${presence(a, 26, moodOf(a.id))}
+      <span class="tc-text"><span class="name">${h(a.name)}</span>${doing ? `<span class="doing shimmer" style="--now:${presenceClock()}">${h(doing)}</span>` : ""}</span>
+      ${busy ? `<i class="work-spin" style="--now:${presenceClock()}"></i>` : ""}</button>`;
   }
   function toolDetail(e) {
     const args = (e.detail || {}).arguments;
@@ -269,57 +291,6 @@
       const a = typeof args === "string" ? JSON.parse(args) : args;
       return String(a.command || a.url || a.query || a.action || a.text || a.name || "").slice(0, 120);
     } catch { return String(args).slice(0, 120); }
-  }
-  function agentStats(aid) {
-    const week = now() - 7 * 86400;
-    const missions = D.data.missions || [];
-    return {
-      active: missions.filter((m) => m.agent === aid && ["running", "queued", "waiting"].includes(m.status)).length,
-      scheduled: (D.data.jobs || []).filter((j) => j.agent === aid && ["active", "pending", "paused"].includes(j.status)).length
-        + (D.data.watches || []).filter((w) => w.agent === aid && w.status === "active").length,
-      done: missions.filter((m) => m.agent === aid && m.status === "completed" && m.updated >= week).length,
-    };
-  }
-  function agentCard(a) {
-    const st = S.agentState[a.id] || "idle";
-    const doing = activityOf(a.id);
-    const t = S.threads.find((x) => x.id === `dm:${a.id}`);
-    const last = t?.last?.ts;
-    const stats = agentStats(a.id);
-    return `<button class="agent-card ${st !== "idle" ? "busy" : ""}" style="--c:${colorOf(a)}" data-act="chat" data-agent="${h(a.id)}">
-      <div class="agent-card-top">${faceSVG(a, 40, moodOf(a.id))}
-        <div style="min-width:0"><div class="name">${h(a.name)}</div><div class="role">${h(a.blurb || "A role tasks can run as")}</div></div></div>
-      <div class="doing"><span class="status-dot ${h(st)}"></span><span>${h(doing || (last ? `Idle · last active ${ago(last)}` : "Idle"))}</span></div>
-      <div class="stats"><span><b>${stats.active}</b>active</span><span><b>${stats.scheduled}</b>scheduled</span><span><b>${stats.done}</b>done</span></div>
-    </button>`;
-  }
-  function growthCard(evo) {
-    if (!evo || evo.enabled === undefined) return `<div class="card growth-card"><span class="muted">Measuring…</span></div>`;
-    const w = evo.week || {}, p = evo.previous_week || {};
-    const rate = w.clean_rate, prev = p.clean_rate;
-    const delta = rate !== null && rate !== undefined && prev !== null && prev !== undefined ? Math.round((rate - prev) * 100) : null;
-    const latest = (evo.latest || []).map((l) => `<div>${icon(l.status === "active" ? "check" : "flask")}<span>${h(l.text)}</span></div>`).join("");
-    const err = w.error_rate, perr = p.error_rate;
-    const errDelta = err !== null && err !== undefined && perr !== null && perr !== undefined ? Math.round((err - perr) * 1000) / 10 : null;
-    const measured = rate !== null && rate !== undefined;
-    return `<div class="card growth-card">
-      <div class="growth-pair">
-        <div><div class="muted" style="font-size:12.5px">Clean runs, 7 days</div>
-          <div class="big">${measured ? pct(rate) : `<span class="muted" style="font-size:15px;font-weight:500">Measuring…</span>`}</div>
-          <div class="muted" style="font-size:12px;margin-top:4px">${delta !== null ? `${delta >= 0 ? "+" : ""}${delta} pts vs last week` : measured ? plural(w.runs, "run") : "counted from today"}</div></div>
-        <div><div class="muted" style="font-size:12.5px">Tool calls failing</div>
-          <div class="big">${err === null || err === undefined ? "—" : `${(err * 100).toFixed(1)}%`}</div>
-          <div class="muted" style="font-size:12px;margin-top:4px">${errDelta !== null ? `${errDelta > 0 ? "+" : ""}${errDelta} pts vs last week` : ""}</div></div>
-        ${sparkline((evo.days || []).map((d) => measured ? d.clean_rate : d.error_rate), 110, 34)}
-      </div>
-      <div style="display:flex;gap:18px;font-size:12.5px;color:var(--text-3)">
-        <span><b style="color:var(--text)">${evo.active || 0}</b> lessons adopted</span>
-        <span><b style="color:var(--text)">${evo.trial || 0}</b> on trial</span>
-        <span><b style="color:var(--text)">${w.corrections ?? 0}</b> corrections this week</span>
-      </div>
-      ${latest ? `<div class="latest">${latest}</div>` : `<div class="latest"><div>${icon("spark")}<span>Lessons appear here as it learns from your corrections and its own repeated mistakes.</span></div></div>`}
-      ${evo.enabled ? "" : `<div class="muted" style="font-size:12px">Learning is paused. Turn it on from the Evolution page.</div>`}
-    </div>`;
   }
   function sparkline(values, w = 120, hgt = 30) {
     const pts = values.map((v, i) => [i, v]).filter(([, v]) => v !== null && v !== undefined);
@@ -345,7 +316,7 @@
     if (v.startsWith("/")) {
       chip.innerHTML = `${icon("term")}<span>Command · runs locally</span>`;
     } else if (a) {
-      chip.innerHTML = `${faceSVG(a, 18, S.agentState[a.id] === "idle" ? "idle" : (S.agentState[a.id] || "idle"))}<span>${m && S.agents[m[1]] ? "" : "Lead · "}${h(a.name)}</span>`;
+      chip.innerHTML = `${presence(a, 18, moodOf(a.id))}<span>${m && S.agents[m[1]] ? "" : "Lead · "}${h(a.name)}</span>`;
     }
     $("#home-send").disabled = !v || D.sending;
   }
@@ -472,18 +443,18 @@
   function updateInbox() {
     const items = D.data.inbox || [];
     $("#inbox-list").innerHTML = items.length ? `<div class="list card">${items.map(inboxItem).join("")}</div>`
-      : `<div class="card"><div class="empty">${teamFaces("happy")}<strong>Nothing needs you</strong>
+      : `<div class="card"><div class="empty">${teamFaces()}<strong>Nothing needs you</strong>
           <span>When the agent needs your say-so, it lands here and on your phone.</span></div></div>`;
   }
-  function teamFaces(state = "idle") {
+  function teamFaces() {
     const agents = Object.values(S.agents).sort((a, b) => (a.order ?? 99) - (b.order ?? 99)).slice(0, 4);
-    return `<span class="bot-stack">${agents.map((a) => faceSVG(a, 36, state)).join("")}</span>`;
+    return `<span class="presence-stack">${agents.map((a) => presence(a, 36, moodOf(a.id))).join("")}</span>`;
   }
 
   /* ---------- tasks ---------- */
   function taskRow(m) {
     const resumable = ["waiting", "failed", "cancelled"].includes(m.status);
-    return `<div class="item clickable" data-act="mission" data-id="${h(m.id)}" role="button" tabindex="0">${faceSVG(S.agents[m.agent], 26, S.agentState[m.agent] || "idle")}
+    return `<div class="item clickable" data-act="mission" data-id="${h(m.id)}" role="button" tabindex="0">${presence(S.agents[m.agent], 26, ["running", "queued"].includes(m.status) ? moodOf(m.agent) : "idle", true)}
       <div class="item-main"><div class="item-title clamp">${h(m.objective)}</div>
         <div class="item-sub">${h(agentName(m.agent))} · updated ${h(ago(m.updated))}</div></div>
       <div class="item-meta">${pill(m.status)}${resumable ? `<button class="btn small" data-act="resume" data-id="${h(m.id)}">Resume</button>` : ""}</div></div>`;
@@ -492,7 +463,7 @@
     return `<div class="view-head"><div><h2>Tasks</h2><p>Every objective you have handed over, what it runs as, and where it stands.
       Tasks survive restarts and wait for you to resume them.</p></div>
       <div class="view-actions"><button class="btn primary" data-act="new-task">${icon("plus")}New task</button></div></div>
-      <div class="toolbar"><div class="tabs" id="task-tabs"></div></div><div id="task-list"></div>`;
+      <div class="toolbar"><div class="tabs" id="task-tabs"></div></div><div id="task-list" data-work-zone="tasks"></div>`;
   }
   function updateTasks() {
     const all = D.data.missions || [];
@@ -506,9 +477,15 @@
     $("#task-tabs").innerHTML = Object.keys(groups).map((k) =>
       `<button class="${D.taskFilter === k ? "on" : ""}" data-act="task-filter" data-filter="${k}">${names[k]}<b>${groups[k].length}</b></button>`).join("");
     const list = groups[D.taskFilter] || all;
-    $("#task-list").innerHTML = list.length ? `<div class="list card">${list.map(taskRow).join("")}</div>`
+    // A task under way is drawn as its card, the same one the conversation shows.
+    const cards = list.filter((m) => Work.get(m.id)?.live);
+    const rows = list.filter((m) => !cards.includes(m));
+    Work.keepFocus(() => {
+    $("#task-list").innerHTML = list.length ? cards.map((m) => Work.card(Work.get(m.id), { flush: true, detail: true })).join("")
+        + (rows.length ? `<div class="list card${cards.length ? " after-work" : ""}">${rows.map(taskRow).join("")}</div>` : "")
       : `<div class="card"><div class="empty">${teamFaces()}<strong>${D.taskFilter === "done" ? "Nothing finished yet" : "No tasks here"}</strong>
           <span>Describe an outcome on Home and a worker takes it on.</span></div></div>`;
+    });
   }
 
   /* ---------- activity: what reached the agent, and what became of it ---------- */
@@ -555,7 +532,7 @@
     D.kernelTimer = setTimeout(loadKernel, 350);
   }
   function workerRow(w) {
-    return `<button class="item clickable" data-act="worker" data-id="${h(w.id)}">${faceSVG(S.agents[w.profile] || {}, 28)}
+    return `<button class="item clickable" data-act="worker" data-id="${h(w.id)}">${presence(S.agents[w.profile] || {}, 28, w.status === "working" ? moodOf(w.profile) : "idle", true)}
       <div class="item-main"><div class="item-title">${h(w.title || "Task")}</div>
       <div class="item-sub">${h(agentName(w.profile))}${w.direct ? " · direct line" : ""}${w.strength === "inferred" ? " · not asked for directly" : ""}${w.speculative ? " · acting ahead" : ""} · ${h(ago(w.updated))}${w.summary ? ` · ${h(clip(w.summary, 110))}` : ""}</div></div>${pill(w.status)}</button>`;
   }
@@ -668,7 +645,7 @@
         j.status === "active" ? `<button class="btn small" data-act="job" data-id="${j.id}" data-do="pause">Pause</button>` : "",
         j.status === "paused" ? `<button class="btn small" data-act="job" data-id="${j.id}" data-do="resume">Resume</button>` : "",
         `<button class="btn small ghost danger" data-act="job" data-id="${j.id}" data-do="delete">Delete</button>`].join("");
-      return `<div class="item">${faceSVG(S.agents[j.agent], 26)}<div class="item-main">
+      return `<div class="item">${presence(S.agents[j.agent], 26, "idle", true)}<div class="item-main">
         <div class="item-title">${h(j.name)}</div>
         <div class="item-sub">${h(agentName(j.agent))} · ${h(j.schedule)} · next ${h(nextRun(j.next_run))}${j.max_runs ? ` · ${j.runs || 0}/${j.max_runs} runs` : ""}</div>
         <div class="item-sub ${j.status === "pending" ? "" : "clamp"}" style="white-space:pre-wrap">${h(j.task)}</div>
@@ -679,7 +656,7 @@
     }).join("")}</div>` : `<div class="card"><div class="empty compact"><span>No scheduled jobs. Ask it to check something every morning, and approve it here.</span></div></div>`;
     const watches = [...(D.data.watches || [])].sort((a, b) => (a.status === "active" ? 0 : 1) - (b.status === "active" ? 0 : 1) || b.ts - a.ts).slice(0, 24);
     $("#watch-count").textContent = watches.filter((w) => w.status === "active").length || "";
-    $("#watch-list").innerHTML = watches.length ? `<div class="list card">${watches.map((w) => `<div class="item">${faceSVG(S.agents[w.agent], 26)}
+    $("#watch-list").innerHTML = watches.length ? `<div class="list card">${watches.map((w) => `<div class="item">${presence(S.agents[w.agent], 26, "idle", true)}
       <div class="item-main"><div class="item-title">${h(w.name)}</div>
         <div class="item-sub">${h(agentName(w.agent))} · ${w.checks}/${w.max_checks} checks · every ${w.interval}s${w.goal ? ` · waiting for: ${h(w.goal)}` : ""}</div>
         <div class="progress"><span style="width:${Math.min(100, 100 * w.checks / Math.max(1, w.max_checks))}%"></span></div>
@@ -879,7 +856,7 @@
   };
   const SOURCE = { failure: "From repeated failures", correction: "From your correction", "owner-rule": "Your standing rule", owner: "Written by you" };
   function lessonRow(l) {
-    const scope = l.agent === "*" ? `${icon("users")}<span>Everywhere</span>` : `${faceSVG(S.agents[l.agent], 16)}<span>${h(agentName(l.agent))}</span>`;
+    const scope = l.agent === "*" ? `${icon("users")}<span>Everywhere</span>` : `${presence(S.agents[l.agent], 16, "idle", true)}<span>${h(agentName(l.agent))}</span>`;
     const statusPill = { trial: pill("trial", "On trial"), active: pill("adopted", "Adopted"), retired: pill("retired", "Retired"),
       suspended: pill("suspended", "Suspended"), proposed: pill("pending", "Waiting for your OK") }[l.status];
     const ev = l.evidence || {};
@@ -1013,7 +990,7 @@
       ...p.scheduled.jobs.map((j) => row("clock", j.name, `${j.schedule} · ${j.status}`)),
       ...p.scheduled.watches.map((w) => row("refresh", w.name, `watch · ${w.checks}/${w.max_checks} checks`)),
     ];
-    $("#agent-panel").innerHTML = `<div class="ap-head">${faceSVG(a, 64, moodOf(a.id))}
+    $("#agent-panel").innerHTML = `<div class="ap-head">${presence(a, 64, moodOf(a.id))}
         <h3>${h(a.name)}</h3><div class="role">${h(p.agent.role || "A role tasks can run as")}</div>
         <span class="model" title="${p.agent.own_model ? "Its own model" : "The default model"}">${h(p.agent.model || "default model")}</span>
         <div class="ap-actions"><button class="btn small" data-act="edit-agent" data-agent="${h(a.id)}">${icon("edit")}Edit</button>
@@ -1128,7 +1105,7 @@
     $("#palette-results").innerHTML = items.map((it, i) => {
       const head = it.group !== group ? `<div class="palette-group">${h((group = it.group))}</div>` : "";
       return `${head}<button class="palette-option ${i === D.paletteIndex ? "selected" : ""}" role="option" aria-selected="${i === D.paletteIndex}" data-palette="${i}">
-        ${it.face ? faceSVG(it.face, 20) : icon(it.icon || "chev")}<strong>${h(it.title)}</strong>${it.sub ? `<small>${h(it.sub)}</small>` : ""}</button>`;
+        ${it.face ? presence(it.face, 20, "idle", true) : icon(it.icon || "chev")}<strong>${h(it.title)}</strong>${it.sub ? `<small>${h(it.sub)}</small>` : ""}</button>`;
     }).join("") || `<div class="empty compact"><span>No matches.</span></div>`;
     $("#palette-results .selected")?.scrollIntoView({ block: "nearest" });
   }
@@ -1330,8 +1307,20 @@
     const row = ev.target.closest?.(".item.clickable[data-act]");
     if (row && (ev.key === "Enter" || ev.key === " ") && ev.target === row) { ev.preventDefault(); act(row); }
   });
-  document.querySelectorAll("#deck-nav button[data-deck]").forEach((b) => b.addEventListener("click", () => show(b.dataset.deck)));
-  $("#new-task-btn").addEventListener("click", () => { show("home"); setTimeout(() => $("#home-input")?.focus(), 30); });
+  document.querySelectorAll("#sidebar button[data-deck]").forEach((b) => b.addEventListener("click", () => show(b.dataset.deck)));
+  $("#more-toggle").addEventListener("click", () => {
+    const open = $("#more-nav").classList.contains("hidden");
+    try { localStorage.setItem("mc-more", open ? "open" : "closed"); } catch {}
+    if (!open && MORE.includes(D.view)) return;      // the view in front lives there
+    $("#more-nav").classList.toggle("hidden", !open);
+    $("#more-toggle").setAttribute("aria-expanded", String(open));
+  });
+  $("#search-toggle").addEventListener("click", () => {
+    const open = $("#search-wrap").classList.toggle("hidden") === false;
+    $("#search-toggle").setAttribute("aria-expanded", String(open));
+    if (open) $("#search").focus();
+    else { $("#search").value = ""; $("#search").dispatchEvent(new Event("input")); }
+  });
   $("#palette-btn").addEventListener("click", () => openPalette());
   $("#palette-close").addEventListener("click", closePalette);
   $("#inspector-close").addEventListener("click", closeInspector);
@@ -1375,13 +1364,12 @@
   window.addEventListener("mc:event", ({ detail: ev }) => {
     if (ev.type === "agent_state") {
       D.data.agents[ev.agent] = { ...(D.data.agents[ev.agent] || {}), state: ev.state };
-      if (D.view === "home") updateHome();
+      if (D.view === "home") { updateTeam(); route(); }
       if (D.panelAgent === ev.agent) refreshPanelSoon();
     }
     if (ev.type === "execution") {
       const r = ev.execution, i = (D.data.executions || []).findIndex((x) => x.id === r.id);
       if (i >= 0) D.data.executions[i] = r; else (D.data.executions = [r, ...(D.data.executions || [])].slice(0, 120));
-      if (D.view === "home") updateHome();
       if (r.agent === D.panelAgent) refreshPanelSoon();
     }
     if (["mission_updated", "watch_updated", "memory_updated", "skills_updated", "agent_added", "agent_updated",
@@ -1398,6 +1386,11 @@
     if (ev.type === "memory_updated" && D.view === "knowledge" && D.knowTab === "memory") loadMemory();
   });
   window.addEventListener("mc:thread", () => applyPanel());
+  // A step landed, or a task came or went: the cards on this page follow.
+  window.addEventListener("mc:work", ({ detail }) => {
+    if (D.view === "home") { updateHomeWork(detail.shape); updateTeam(); }
+    else if (D.view === "missions") { if (detail.shape) updateTasks(); else Work.paint($("#task-list")); }
+  });
   let resizeTimer;
   window.addEventListener("resize", () => {
     if (D.view === "chat") applyPanel();
@@ -1416,7 +1409,7 @@
   // A quiet poll so ages and counts stay honest without a live event.
   setInterval(() => { if (!document.hidden && D.loaded && D.view !== "chat") refresh(); }, 20000);
   const mac = /Mac|iPhone|iPad/.test(navigator.platform);
-  document.querySelectorAll(".shortcut-key").forEach((k) => { k.textContent = mac ? "⌘K" : "Ctrl K"; });
+  $("#palette-btn").title = `Search and commands (${mac ? "⌘K" : "Ctrl K"})`;
 
   applyTheme();
   window.MissionDeck = { show, showChat, notify, refresh };

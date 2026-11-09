@@ -31,14 +31,20 @@ with sync_playwright() as p:
         page.locator('.home-hero h2').wait_for()
         assert not page.locator('#welcome-backdrop').is_visible(), 'welcome screen showed on a configured app'
         agents = page.evaluate('Object.keys(S.agents).length')
-        page.locator('.agent-card:not(.add)').first.wait_for()
-        assert page.locator('.agent-card:not(.add)').count() == agents
+        page.locator('.team-chip:not(.add)').first.wait_for()
+        assert page.locator('.team-chip:not(.add)').count() == agents
+        # A profile is a presence, never a face.
+        assert page.locator('.presence').count() >= agents * 2
+        assert page.locator('.bot, .eye, .mouth').count() == 0, 'a face is still drawn somewhere'
         assert page.locator('#convo-list .convo').count() == agents + 1, 'every agent and the team chat'
+        # The views used less often sit under More, folded until asked for.
+        assert not page.locator('#more-nav').is_visible()
+        page.locator('#more-toggle').click()
         for view, title in VIEWS.items():
-            page.locator(f'#deck-nav [data-deck="{view}"]').click()
+            page.locator(f'#sidebar [data-deck="{view}"]').click()
             page.wait_for_timeout(500)
             assert page.locator('#deck-title').inner_text() == title
-            assert page.locator(f'#deck-nav [data-deck="{view}"]').get_attribute('aria-current') == 'page'
+            assert page.locator(f'#sidebar [data-deck="{view}"]').get_attribute('aria-current') == 'page'
             page.screenshot(path=str(out / f'{view}-{scheme}.png'))
         # Charts are drawn at the width they are shown at, so labels are not stretched.
         chart = page.locator('#evo-charts svg.chart').first
@@ -64,7 +70,7 @@ with sync_playwright() as p:
         assert page.locator('.palette-option').count() >= 1
         page.keyboard.press('Escape')
         assert not page.locator('#command-palette').is_visible()
-        page.locator('#deck-nav [data-deck="home"]').click()
+        page.locator('#sidebar [data-deck="home"]').click()
         assert not errors, errors
         assert not posts, f'a read-only check sent requests: {posts}'
         page.close()

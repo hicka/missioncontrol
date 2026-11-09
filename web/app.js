@@ -10,79 +10,34 @@ const S = {
 
 const $ = (sel) => document.querySelector(sel);
 
-/* ---------- characters ----------
-   Every agent is a small creature in its own colour. The shape belongs to the
-   agent and never changes; the face belongs to the moment: blinking when idle,
-   glancing up while it thinks, focused under a turning ring while it works,
-   delighted for a few seconds when it finishes, asleep after hours of quiet. */
-const SHAPES = ["round", "squircle", "pebble", "bean", "drop"];
-function hashOf(s) {
-  let h = 0;
-  for (const ch of String(s || "")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return h;
-}
-function luminance(hex) {
-  const [r, g, b] = [1, 3, 5].map((i) => {
-    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-  });
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
+/* ---------- profiles ----------
+   A profile is drawn as a presence (web/presence.js): a body in its colour whose
+   motion says how it is. The mood comes from the work it has under way first,
+   and from what it is doing itself second (web/work.js). */
 function colorOf(agent) {
   return /^#[0-9a-f]{6}$/i.test(agent?.color || "") ? agent.color : "#8e8e93";
 }
-// kept for older callers: the colour an agent shows as, readable on any theme
-function accentFor(agent) { return colorOf(agent); }
-function faceSVG(agent, size = 28, state = "idle") {
-  const hex = colorOf(agent);
-  const lum = luminance(hex);
-  const shape = agent?.shape === "hex" ? "hex" : SHAPES[hashOf(agent?.id || agent?.name) % SHAPES.length];
-  const cls = ["bot", `shape-${shape}`, `st-${state}`];
-  // A near-black agent would vanish on the dark theme, so it takes the
-  // theme's own ink instead; a merely dark one keeps its colour with light eyes.
-  if (lum < 0.05) cls.push("inkless");
-  else if (lum < 0.16) cls.push("dark-ink");
-  if (size < 22) cls.push("tiny");
-  if (size >= 40) cls.push("big");
-  const blink = (hashOf(agent?.id || agent?.name) % 55) / 10;
-  // set inline, so the theme's ink has to be named here too: a class cannot
-  // override an inline custom property
-  const body = lum < 0.05 ? "var(--bot-dark)" : hex;
-  return `<span class="${cls.join(" ")}" style="--s:${size}px;--c:${body};--blink:-${blink}s" aria-hidden="true">` +
-    `<span class="bot-body"></span><i class="eye l"></i><i class="eye r"></i><i class="mouth"></i></span>`;
-}
-function avatarSVG(agent, size = 44) { return faceSVG(agent, size); }
 function teamTile(size = 28) {
   return `<span class="team-tile" style="--s:${size}px" aria-hidden="true"><svg class="i"><use href="#i-users"/></svg></span>`;
 }
 function groupAvatar(members, size = 44) { return teamTile(size); }
-function moodOf(aid) {
-  const st = S.agentState[aid] || "idle";
-  if (st !== "idle") return st;
-  if (S.flash?.[aid]) return "happy";
-  if (S.link === false) return "sad";
-  const t = S.threads.find((x) => x.id === `dm:${aid}`);
-  if (t?.last?.ts && Date.now() / 1000 - t.last.ts > 24 * 3600) return "sleepy";
-  return "idle";
-}
-function stateAvatar(aid, size = 44) { return faceSVG(S.agents[aid], size, moodOf(aid)); }
+function moodOf(aid) { return Work.mood(aid); }
+function stateAvatar(aid, size = 44) { return presence(S.agents[aid], size, moodOf(aid)); }
 function threadAvatar(t, size = 44) {
   return t.kind === "group" ? teamTile(size) : stateAvatar(t.agent, size);
 }
-const STATE_LABEL = { thinking: "Thinking…", doing: "Working…" };
-function activityOf(aid) {
-  const st = S.agentState[aid] || "idle";
-  if (st === "thinking") return "Thinking…";
-  if (st === "doing") return S.agentTool[aid] ? `Working · ${S.agentTool[aid].replaceAll("_", " ")}` : "Working…";
-  return "";
-}
+// What a profile is on right now, in words. Empty when it is at rest.
+function activityOf(aid) { return Work.busy(aid) ? Work.doing(aid) : ""; }
 function updateHeaderStatus() {
   const t = currentThread();
   const el = $("#header-status");
   if (!el) return;
   if (t && t.kind === "dm") {
     const st = S.agentState[t.agent] || "idle";
-    el.textContent = activityOf(t.agent) || S.agents[t.agent]?.blurb || "";
+    // The lead's line says who it is waiting on; anyone else's says what they are on.
+    const lead = Object.values(S.agents).sort((a, b) => (a.order ?? 99) - (b.order ?? 99))[0]?.id;
+    const waitingOn = t.agent === lead && Work.live().length ? Work.leadLine(lead) : "";
+    el.textContent = activityOf(t.agent) || waitingOn || S.agents[t.agent]?.blurb || "";
     el.className = `st-text st-${st}`;
     $("#stop-btn").classList.toggle("hidden", !(st === "thinking" || st === "doing"));
     $("#header-avatar").innerHTML = threadAvatar(t, 30);
@@ -108,7 +63,8 @@ function fmtInline(s) {
     i % 2 ? `<code>${esc(part.slice(1, -1))}</code>`
           : esc(part).replace(/(^|[\s(])#(\d{2,5})\b/g, '$1<span class="pr">#$2</span>')).join("");
 }
-const URL_RX = /https?:\/\/[^\s<>"]+/g;
+// A markdown link, or a bare address.
+const URL_RX = /\[([^\]\n]{1,160})\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"]+)/g;
 function mdInline(s) {
   const plain = (t) => esc(t).replace(/\*\*([^*\n]+?)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[\s(])#(\d{2,5})\b/g, '$1<span class="pr">#$2</span>');
@@ -118,12 +74,14 @@ function mdInline(s) {
     // part of the link, and trailing punctuation is not.
     let out = "", last = 0;
     for (const m of part.matchAll(URL_RX)) {
-      let url = m[0];
-      const trail = url.match(/[.,;:!?)\]}'"]+$/);
-      if (trail) url = url.slice(0, -trail[0].length);
+      let url = m[2] || m[3], end = m.index + m[0].length;
+      if (!m[2]) {
+        const trail = url.match(/[.,;:!?)\]}'"]+$/);
+        if (trail) { url = url.slice(0, -trail[0].length); end -= trail[0].length; }
+      }
       out += plain(part.slice(last, m.index)) +
-        `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`;
-      last = m.index + url.length;
+        `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${m[2] ? plain(m[1]) : esc(url)}</a>`;
+      last = end;
     }
     return out + plain(part.slice(last));
   }).join("");
@@ -239,12 +197,11 @@ function hitsHtml() {
   return `<div class="hits"><div class="hits-head">Messages</div>${rows}</div>`;
 }
 
-// The team, in roster order: where an agent sits in the list should not move
-// every time it speaks. The team chat leads.
+// The chats, in roster order: where a profile sits in the list should not move
+// every time it speaks. A row says what its profile is on only while it is busy.
 function renderSidebar() {
   const q = ($("#search").value || "").toLowerCase();
   const list = $("#convo-list");
-  // One agent to talk to, and below it the specialists you can step in with directly.
   const main = Object.values(S.agents).sort((a, b) => (a.order ?? 99) - (b.order ?? 99))[0]?.id;
   const rank = (t) => t.agent === main ? -1 : t.kind === "group" ? 1000 : (S.agents[t.agent]?.order ?? 99);
   const inChat = !document.body.classList.contains("deck-mode");
@@ -253,20 +210,19 @@ function renderSidebar() {
     .filter((t) => !q || t.name.toLowerCase().includes(q) ||
       (S.agents[t.agent]?.blurb || "").toLowerCase().includes(q))
     .map((t) => {
-      const doing = t.agent ? activityOf(t.agent) : "";
-      const divider = t.agent === main && !q ? `<div class="convo-divider-slot"></div>` : "";
+      const busy = t.agent ? Work.busy(t.agent) : false;
+      const doing = busy ? Work.doing(t.agent) : "";
+      const mark = S.unread[t.id] ? '<span class="unread-dot" aria-label="Unread"></span>'
+        : busy ? `<i class="work-spin" style="--now:${presenceClock()}" aria-label="Working"></i>` : "";
       return `<button class="convo ${inChat && S.current === t.id ? "selected" : ""}" data-id="${esc(t.id)}">
-        <span class="convo-face">${threadAvatar(t, 28)}</span>
+        <span class="convo-face">${threadAvatar(t, 22)}</span>
         <span class="convo-body">
           <span class="convo-name">${esc(t.name)}</span>
-          <span class="convo-preview ${doing ? "busy" : ""}">${doing ? esc(doing) : previewOf(t)}</span>
-        </span>
-        ${S.unread[t.id] ? '<span class="unread-dot" aria-label="unread"></span>' : ""}
-      </button>${divider}`;
+          ${doing ? `<span class="convo-preview busy">${esc(doing)}</span>` : ""}
+        </span>${mark}
+      </button>`;
     })
     .join("") + hitsHtml();
-  list.querySelector(".convo-divider-slot")?.insertAdjacentHTML("beforebegin", '<div class="convo-divider">Step in directly</div>');
-  list.querySelector(".convo-divider-slot")?.remove();
   list.querySelectorAll(".convo").forEach((el) =>
     el.addEventListener("click", () => { document.body.classList.remove("nav-open"); openThread(el.dataset.id); }));
   list.querySelectorAll(".hit-row").forEach((el) =>
@@ -359,8 +315,8 @@ function eventHtml(m) {
 function headFor(sender, ts, state = "idle") {
   const agent = S.agents[sender];
   const name = agent ? agent.name : sender;
-  const face = agent ? faceSVG(agent, 28, state)
-    : faceSVG({ id: sender, name: sender, color: "#8e8e93" }, 28, state);
+  // Only a reply being written moves; the heads of what was already said hold still.
+  const face = presence(agent || { id: sender, name: sender, color: "#8e8e93" }, 28, state, state === "idle");
   return `<div class="line-head">${face}<span class="who">${esc(name)}</span>` +
     (ts ? `<span class="when">${fmtTime(ts)}</span>` : "") + `</div>`;
 }
@@ -371,8 +327,13 @@ function renderMessages(keep) {
   const el = $("#messages");
   let html = "", prev = null;
   const msgs = S.msgs;
+  // Work sits after the words that set it going, which are written a moment after it
+  // starts. What began before this page of messages belongs to an earlier page.
+  const pageStart = msgs.length ? msgs[0].ts : 0;
+  const pending = Work.inThread(t.id).filter((w) => w.started >= pageStart - 5).sort((a, b) => a.started - b.started);
   for (let i = 0; i < msgs.length; i++) {
     const m = msgs[i];
+    while (pending.length && pending[0].started + 4 < m.ts) html += Work.card(pending.shift());
     if (!prev || m.ts - prev.ts > 1800) html += `<div class="day-sep">${fmtDay(m.ts)}</div>`;
 
     if (isBeat(m)) {
@@ -453,9 +414,9 @@ function renderMessages(keep) {
     if (m.kind === "a2a" && t.kind === "dm") {
       const me = t.agent;
       const other = m.sender === me ? m.meta.to : m.sender;
-      const otherAgent = S.agents[other] || { id: other, name: other, color: "#8e8e93", shape: "face" };
+      const otherAgent = S.agents[other] || { id: other, name: other, color: "#8e8e93" };
       const dir = m.sender === me ? "Messaged" : "From";
-      html += `<div class="interstitial">${dir} ${faceSVG(otherAgent, 18)} <span>${esc(otherAgent.name)}</span>
+      html += `<div class="interstitial">${dir} ${presence(otherAgent, 18)} <span>${esc(otherAgent.name)}</span>
         <span class="when">${fmtTime(m.ts)}</span></div>`;
       html += `<div class="row in a2a"><div class="bubble">${fmt(m.text)}</div></div>`;
       prev = m; continue;
@@ -478,6 +439,7 @@ function renderMessages(keep) {
       ${out ? `title="${esc(fmtTime(m.ts))}"` : ""}>${head}<div class="bubble">${attHtml}${fmt(m.text)}</div></div>`;
     prev = m;
   }
+  if (S.atLatest) for (const w of pending) html += Work.card(w);
   for (const [key, on] of Object.entries(S.typing)) {
     const [aid, thread] = key.split("|");
     if (!on) continue;
@@ -502,15 +464,15 @@ function renderMessages(keep) {
     html = `<div class="load-older"${S.loadingOlder ? ' data-loading="1"' : ""}>` +
       (S.loadingOlder ? "Loading earlier messages…" : "Earlier messages") + `</div>` + html;
   }
-  if (!msgs.length && !S.hasMore) {
+  if (!msgs.length && !S.hasMore && !Work.inThread(t.id).length) {
     const a = t.agent ? S.agents[t.agent] : null;
-    html = `<div class="empty">${a ? faceSVG(a, 56, "happy") : teamTile(56)}
+    html = `<div class="empty">${a ? presence(a, 56, moodOf(a.id)) : teamTile(56)}
       <strong>${esc(a ? a.name : "Group chat")}</strong>
       <span>${esc(a ? (a.blurb || "Ready when you are.") : "Messages here reach the agent, or any profile you @mention.")}</span></div>`;
   }
   const sc = $("#scroll");
-  const before = { h: sc.scrollHeight, top: sc.scrollTop };
-  el.innerHTML = html;
+  const before = { h: sc.scrollHeight, top: sc.scrollTop, atFoot: sc.scrollHeight - sc.scrollTop - sc.clientHeight < 80 };
+  Work.keepFocus(() => { el.innerHTML = html; });
   el.querySelectorAll(".imp-btn").forEach((b) =>
     b.addEventListener("click", () => onImprovement(b.dataset.id, b.dataset.act, b)));
   el.querySelectorAll(".appr-btn").forEach((b) =>
@@ -539,6 +501,9 @@ function renderMessages(keep) {
     } else {
       sc.scrollTop = sc.scrollHeight;
     }
+  } else if (keep === "stay" && !before.atFoot) {
+    // a card changed while the reader was further up: leave them there
+    sc.scrollTop = before.top;
   } else if (keep === "top") {
     // older messages were prepended: hold the reader where they were
     sc.scrollTop = sc.scrollHeight - before.h + before.top;
@@ -625,7 +590,7 @@ let naEditId = null;
 
 function naPreview() {
   const a = naEditId ? S.agents[naEditId] : null;
-  $("#na-preview").innerHTML = avatarSVG({ color: naColor, shape: a?.shape || "face",
+  $("#na-preview").innerHTML = presence({ color: naColor,
     id: naEditId || ($("#na-name").value || "").toLowerCase().replace(/[^a-z0-9]+/g, "") }, 44);
 }
 function renderSwatches() {
@@ -912,6 +877,7 @@ function onEvent(ev) {
     if (e && e.kind === "tool") {
       if (e.status === "running") S.agentTool[e.agent] = e.name;
       else if (S.agentTool[e.agent] === e.name) delete S.agentTool[e.agent];
+      Work.step(e);
       renderSidebar();
       updateHeaderStatus();
     }
@@ -929,26 +895,47 @@ function onEvent(ev) {
   } else if (ev.type === "user") {
     S.user = ev.user; updateProfile();
   } else if (ev.type === "approvals_updated") {
+    Work.soon();
     renderJobsPane();
   } else if (ev.type === "cron_updated") {
+    Work.soon();
     pollPendingJobs().then(renderMessages);
     if (!$("#settings-backdrop").classList.contains("hidden")) renderJobsPane();
   } else if (ev.type === "watch_updated") {
+    Work.soon();
     if (!$("#settings-backdrop").classList.contains("hidden")) renderJobsPane();
+  } else if (ev.type === "session_updated" || ev.type === "mission_updated") {
+    Work.soon();
   }
 }
 
 function updateProfile() {
-  if (!S.user) return;
-  $("#profile-badge").textContent = S.user.initials;
-  $("#profile-name").textContent = S.user.name;
+  $("#profile-name").textContent = S.link === false ? "Reconnecting…" : (S.user?.name || "Connected");
 }
+
+/* A card gained a step, or a task came or went. Cards already on the page are brought
+   up to date where they stand; the conversation is laid out again only when the set
+   of tasks changed. */
+window.addEventListener("mc:work", ({ detail }) => {
+  const sc = $("#scroll");
+  const chatShown = !$("#chat").classList.contains("hidden");
+  const atFoot = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 80;
+  if (detail.shape && chatShown && S.current && S.atLatest) renderMessages("stay");
+  else Work.paint($("#messages"));
+  if (chatShown && atFoot) sc.scrollTop = sc.scrollHeight;
+  renderSidebar();
+  updateHeaderStatus();
+});
+window.addEventListener("mc:work-layout", () => {
+  const sc = $("#scroll");
+  if (sc.scrollHeight - sc.scrollTop - sc.clientHeight < 120) sc.scrollTop = sc.scrollHeight;
+});
 
 function setLink(on) {
   S.link = on;
-  const el = $("#link-dot");
-  el.textContent = on ? "Connected" : "Reconnecting…";
-  el.classList.toggle("on", on);
+  $("#link-dot").classList.toggle("on", on);
+  $("#link-dot").title = on ? "Connected" : "Reconnecting…";
+  updateProfile();
   renderSidebar();
   updateHeaderStatus();
   window.dispatchEvent(new CustomEvent("mc:connection", {detail: on}));
@@ -960,7 +947,7 @@ function connectWS() {
   S.ws.onopen = async () => {
     setLink(true);
     try {
-      await refreshState();
+      await Promise.all([refreshState(), Work.load()]);
       if (S.current && S.atLatest) {
         const id = S.current;
         const page = await fetchThreadPage(id);
@@ -974,6 +961,9 @@ function connectWS() {
 }
 
 /* ---------- composer ---------- */
+function syncSend() {
+  $("#send-btn").classList.toggle("idle", !$("#input").value.trim() && !S.pendingFiles.some((f) => !f.uploading));
+}
 function renderPendingFiles() {
   const wrap = $("#pending-files");
   wrap.classList.toggle("hidden", !S.pendingFiles.length);
@@ -1002,8 +992,7 @@ async function attachFiles(fileList) {
       S.pendingFiles = S.pendingFiles.filter((f) => f !== entry);
     }
     renderPendingFiles();
-    $("#send-btn").classList.toggle("hidden",
-      !$("#input").value.trim() && !S.pendingFiles.length);
+    syncSend();
   }
 }
 
@@ -1026,7 +1015,7 @@ async function send() {
     if (input.value.trim() === text) { input.value = ""; input.style.height = "auto"; }
     S.pendingFiles = S.pendingFiles.filter((f) => !atts.includes(f));
     renderPendingFiles();
-    $("#send-btn").classList.toggle("hidden", !input.value.trim());
+    syncSend();
   } catch (err) {
     window.MissionDeck?.notify(err.message, true);
   } finally {
@@ -1120,7 +1109,7 @@ async function init() {
   input.addEventListener("input", () => {
     input.style.height = "auto";
     input.style.height = Math.min(input.scrollHeight, 130) + "px";
-    $("#send-btn").classList.toggle("hidden", !input.value.trim());
+    syncSend();
   });
   $("#send-btn").addEventListener("click", send);
   $("#attach-btn").addEventListener("click", () => $("#file-input").click());
@@ -2197,7 +2186,6 @@ function voiceHandsFree() { return $("#voice-handsfree").checked; }
 function voiceUI() {
   $("#voice-panel").classList.toggle("hidden", !V.on);
   $("#voice-btn").classList.toggle("active", V.on);
-  $("#mic-btn").classList.toggle("active", V.on);
   const t = currentThread();
   $("#voice-title").textContent = t ? `Talking with ${t.name}` : "Voice mode";
   const label = { idle: "Paused. Press Talk, or turn on hands-free.",
@@ -2205,9 +2193,9 @@ function voiceUI() {
                   thinking: "Thinking…", speaking: "Speaking…" }[V.phase] || "";
   $("#voice-status").textContent = V.err || label;
   $("#voice-orb").className = `voice-orb ${V.phase}`;
-  const mood = V.err ? "sad" : ({ listening: "listening", thinking: "thinking", speaking: "speaking" }[V.phase] || "idle");
-  $("#voice-orb").innerHTML = t?.agent
-    ? `<span class="avatar-wrap st-${mood}">${faceSVG(S.agents[t.agent], 34, mood)}</span>` : "";
+  // Listening it waits on you, thinking something circles it, speaking light runs round it.
+  const mood = V.err ? "sad" : ({ listening: "waiting", thinking: "thinking", speaking: "working" }[V.phase] || "idle");
+  $("#voice-orb").innerHTML = t?.agent ? presence(S.agents[t.agent], 34, mood) : "";
   $("#voice-talk").classList.toggle("hidden", V.phase !== "idle");
 }
 
@@ -2417,7 +2405,6 @@ function initVoice() {
   });
   const toggle = () => (V.on ? voiceClose() : voiceOpen());
   $("#voice-btn").addEventListener("click", toggle);
-  $("#mic-btn").addEventListener("click", toggle);
   $("#voice-close").addEventListener("click", voiceClose);
   $("#voice-stop").addEventListener("click", () => { voiceStopAll(); V.phase = "idle"; voiceUI(); });
   $("#voice-talk").addEventListener("click", voiceListen);
