@@ -258,3 +258,14 @@ permission inspection without starting a backend, and `--no-bar` leaves the floa
 out. The bundled runtime supports
 `--inventory` for diagnostics. `/api/runtime` and the associated mutation routes
 are limited to local clients and reject cross-origin control requests.
+
+## The window
+
+The sidebar keeps what is used every day in view (Home, Inbox, Tasks and the chats) and the rest
+under More, which opens by itself when something in it wants attention. Home is somewhere to
+hand over a task, what needs you, the work under way, and the team. A conversation shows each
+task it started as a card: the steps tick off as they finish, a failed step turns the card to
+"Fixing", and the header says who the lead is waiting on. Motion is driven by the clock and
+stops when Reduce Motion is on.
+
+`--open chat` (or `inbox`, `tasks`, `activity`) starts the app on that screen.

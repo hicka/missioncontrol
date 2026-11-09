@@ -94,10 +94,15 @@ RETIRED_TOOLS = {"message_agent", "message_user"}
 # Anything succeeding in between resets the count: starting the server a health
 # check was failing on is exactly what makes the third check worth running.
 REPEAT_FAILURES = 2
+# Tools whose call can carry a line for the owner on what the step is for.
+NOTED_TOOLS = ("terminal", "claude_code")
 
 
 def _call_key(name: str, args) -> str:
     import hashlib
+    # Without the note: the same failing command described in new words is the same command.
+    if name in NOTED_TOOLS and isinstance(args, dict) and "note" in args:
+        args = {k: v for k, v in args.items() if k != "note"}
     try:
         raw = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
     except Exception:
@@ -219,7 +224,8 @@ class Harness:
         record = await asyncio.to_thread(store.execution_start, "tool", profile, name,
             {"arguments": redact(audit_args), "call_id": call_id, "session": aid}, turn.get("mission"),
             session["id"] if session else None)
-        await self.emit({"type": "execution", "execution": record})
+        import workview
+        await self.emit({"type": "execution", "execution": workview.labelled(record)})
         status, result, content = "failed", "tool did not finish", None
         try:
             validator = self.validators.get(name)
@@ -289,7 +295,7 @@ class Harness:
             result = f"error: {name} failed ({type(exc).__name__}): {redact(str(exc))[:400]}"
         finally:
             record = await asyncio.to_thread(store.execution_finish, record["id"], status, redact(result))
-            await self.emit({"type": "execution", "execution": record})
+            await self.emit({"type": "execution", "execution": workview.labelled(record)})
             if status == "failed" and not result.startswith("error: refused: this exact"):
                 book = self.failures.setdefault(aid, {})
                 key = _call_key(name, args)

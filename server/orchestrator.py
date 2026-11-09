@@ -602,6 +602,8 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "command": {"type": "string"},
+                "note": {"type": "string", "description": "A few plain words on what this step is for, such as "
+                                                           "'Run the test suite'. The owner sees it as you work."},
                 "cwd": {"type": "string", "description": "Working directory (defaults to your repo)"},
                 "again": {"type": "boolean",
                           "description": "Outward commands (submit, deploy, push, publish, send) "
@@ -620,6 +622,8 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "task": {"type": "string", "description": "Complete task description"},
+                "note": {"type": "string", "description": "A few plain words on what this step is for, such as "
+                                                           "'Run the test suite'. The owner sees it as you work."},
                 "repo": {"type": "string", "description": "Repo path (defaults to your repo)"},
             },
             "required": ["task"],
@@ -1912,7 +1916,8 @@ class Orchestrator:
         key = ctx.id
         # the trail is what the reflection pass reads afterwards to decide
         # whether this turn was a procedure worth keeping
-        detail = next((str(v) for v in args.values() if isinstance(v, str) and v.strip()), "")
+        detail = next((str(v) for k, v in args.items() if not (k == "note" and name in harness.NOTED_TOOLS)
+                       and isinstance(v, str) and v.strip()), "")
         ctx.trail.append(f"{name}: {' '.join(detail.split())[:130]}")
         if name == "browser":
             import browser as browser_mod

@@ -12,25 +12,28 @@ private let profilePanelKey = "chat.profilePanel"
 struct ChatView: View {
     @Environment(Store.self) private var store
     let threadID: String
-    @AppStorage(profilePanelKey) private var panelWanted = true
+    @AppStorage(profilePanelKey) private var panelWanted = false
     @State private var panelShown: Bool
 
     @MainActor init(threadID: String) {
         self.threadID = threadID
-        let wanted = UserDefaults.standard.object(forKey: profilePanelKey) as? Bool ?? true
+        let wanted = UserDefaults.standard.object(forKey: profilePanelKey) as? Bool ?? false
         _panelShown = State(initialValue: threadID.hasPrefix("dm:") && wanted && Self.windowIsWide)
     }
 
     var body: some View {
         let model = store.thread(threadID)
         VStack(spacing: 0) {
+            // In the band the window keeps for a title it no longer shows.
             ChatHeader(threadID: threadID, panelShown: panelShown, togglePanel: togglePanel)
+                .padding(.top, 6)
             Divider()
             MessageList(model: model, threadID: threadID)
                 .overlay(alignment: .bottom) { LatestButton(model: model).padding(.bottom, 12) }
             ChatComposer(threadID: threadID)
                 .zIndex(1)
         }
+        .ignoresSafeArea(.container, edges: .top)
         .modifier(FileDropZone(threadID: threadID))
         .inspector(isPresented: $panelShown) {
             if threadID.hasPrefix("dm:") {
@@ -126,7 +129,13 @@ private struct ChatHeader: View {
         case "doing":
             if let tool = store.tools[agentID] { return "Working · \(tool.replacingOccurrences(of: "_", with: " "))" }
             return "Working…"
-        default: return store.agentInfo[agentID].role.str
+        default:
+            // Quiet itself, with work it handed out still going: say who has it.
+            let live = store.liveWork(in: threadID)
+            if let needs = live.first(where: { $0.phase == "needs_you" }) { return "\(needs.agentName) needs you" }
+            let names = Array(Set(live.map(\.agentName))).sorted()
+            if !names.isEmpty { return "Waiting on \(names.prefix(2).joined(separator: " and "))\(names.count > 2 ? " and others" : "")" }
+            return store.agentInfo[agentID].role.str
         }
     }
 
@@ -149,6 +158,8 @@ private enum ChatRow: Identifiable, Equatable {
     case event(Message)
     case relay(Message)
     case message(Message, first: Bool)
+    /// A task this conversation started, placed where it began. The card reads the rest.
+    case work(WorkRef)
 
     var id: String {
         switch self {
@@ -157,6 +168,7 @@ private enum ChatRow: Identifiable, Equatable {
         case .tools(let group): return "tools-\(group.first?.id ?? 0)"
         case .job(let message), .proposal(let message), .event(let message), .relay(let message): return "row-\(message.id)"
         case .message(let message, _): return "message-\(message.id)"
+        case .work(let ref): return "work-\(ref.id)"
         }
     }
 
@@ -172,13 +184,20 @@ private enum ChatRow: Identifiable, Equatable {
 
     private static func isBeat(_ message: Message) -> Bool { message.kind == "sys" && message.sender == "heartbeat" }
 
-    static func rows(_ messages: [Message], inDirectChat: Bool) -> [ChatRow] {
+    static func rows(_ messages: [Message], inDirectChat: Bool, work: [WorkRef] = [], atLatest: Bool = true) -> [ChatRow] {
         var rows: [ChatRow] = []
-        rows.reserveCapacity(messages.count + 8)
+        rows.reserveCapacity(messages.count + work.count + 8)
         var previous: Message?
         var index = 0
+        // Work sits after the words that set it going, which are written a moment after it
+        // starts. What began before this page of messages belongs to an earlier page.
+        let pageStart = messages.first?.ts ?? 0
+        var pending = work.filter { $0.started >= pageStart - 5 }.sorted { $0.started < $1.started }[...]
         while index < messages.count {
             let message = messages[index]
+            while let next = pending.first, next.started + 4 < message.ts {
+                rows.append(.work(next)); pending = pending.dropFirst()
+            }
             if previous.map({ message.ts - $0.ts > 1800 }) ?? true { rows.append(.day(message)) }
             if isBeat(message) {
                 // A run of pulses, with the tool calls they set off, is one line.
@@ -212,6 +231,7 @@ private enum ChatRow: Identifiable, Equatable {
             previous = messages[index]
             index += 1
         }
+        if atLatest { for ref in pending { rows.append(.work(ref)) } }
         return rows
     }
 }
@@ -223,11 +243,19 @@ private struct MessageList: View {
     @State private var follow = Follow()
 
     /// Held outside SwiftUI's state: it flips while scrolling, and nothing it decides is drawn.
-    final class Follow { var atFoot = true }
+    final class Follow {
+        var atFoot = true
+        /// Following the newest. Growth pushes the foot off screen before anything hears a
+        /// row was added, so being there cannot be the test: only the reader scrolling up
+        /// lets go, and coming back to the foot takes hold again.
+        var near = true
+        var wheel: Any?
+    }
     private static let foot = "chat-foot"
 
     var body: some View {
-        let rows = ChatRow.rows(model.messages, inDirectChat: threadID.hasPrefix("dm:"))
+        let rows = ChatRow.rows(model.messages, inDirectChat: threadID.hasPrefix("dm:"),
+                                work: store.work(in: threadID), atLatest: model.atLatest)
         let anchor = model.anchor
         ScrollViewReader { proxy in
             ScrollView {
@@ -244,10 +272,10 @@ private struct MessageList: View {
                         ChatRowView(row: row, threadID: threadID, hit: row.isMessage(id: anchor)).equatable()
                     }
                     if model.atLatest {
-                        LiveReplies(threadID: threadID) { if follow.atFoot { toFoot(proxy) } }
+                        LiveReplies(threadID: threadID) { if follow.near { toFoot(proxy) } }
                     }
                     Color.clear.frame(height: 1).id(Self.foot)
-                        .onAppear { follow.atFoot = true }
+                        .onAppear { follow.atFoot = true; follow.near = true }
                         .onDisappear { follow.atFoot = false }
                 }
                 .padding(.horizontal, 20).padding(.vertical, 16)
@@ -256,15 +284,39 @@ private struct MessageList: View {
             }
             .defaultScrollAnchor(.bottom)
             .id("\(threadID)#\(model.generation)")
+            .onAppear { watchWheel() }
+            .onDisappear { unwatchWheel() }
             .onChange(of: model.messages.last?.id) {
                 // Someone reading further up keeps their place, unless they just sent this.
-                if follow.atFoot || model.messages.last?.sender == "user" { toFoot(proxy) }
+                if follow.near || model.messages.last?.sender == "user" { toFoot(proxy) }
             }
+            .onChange(of: rows.count) { if follow.near { toFoot(proxy) } }
+            // A card growing a step pushes the foot down. Someone at the foot stays there.
+            .onChange(of: store.workSize(in: threadID)) { if follow.near { toFoot(proxy) } }
         }
     }
 
     private func toFoot(_ proxy: ScrollViewProxy) {
+        follow.near = true
         DispatchQueue.main.async { proxy.scrollTo(Self.foot, anchor: .bottom) }
+        // And once more when the new row has its real height: a lazy list scrolls to where
+        // it guessed the foot would be.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            if follow.near { withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo(Self.foot, anchor: .bottom) } }
+        }
+    }
+
+    private func watchWheel() {
+        guard follow.wheel == nil else { return }
+        let follow = follow
+        follow.wheel = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            if event.scrollingDeltaY > 0.5 { follow.near = false }
+            return event
+        }
+    }
+
+    private func unwatchWheel() {
+        if let wheel = follow.wheel { NSEvent.removeMonitor(wheel); follow.wheel = nil }
     }
 
     /// Older messages arrive above the reader, so the row they were looking at goes back to
@@ -369,6 +421,7 @@ private struct ChatRowView: View, Equatable {
         case .event(let message): EventRow(message: message)
         case .relay(let message): RelayRow(message: message, threadID: threadID)
         case .message(let message, let first): MessageRow(message: message, first: first, hit: hit)
+        case .work(let ref): WorkCard(id: ref.id)
         }
     }
 }
@@ -1037,12 +1090,12 @@ private struct LiveReplies: View {
         ForEach(Array(Set(waiting)).sorted(), id: \.self) { id in
             HStack(spacing: 10) {
                 AgentBadge(agent: store.agent(id), size: 24)
-                ProgressView().controlSize(.small)
-                Text(verbatim: store.tools[id].map { "Running \($0.replacingOccurrences(of: "_", with: " "))" } ?? "Thinking…")
+                ThinkingDots()
+                Shimmer(text: store.tools[id].map { $0.replacingOccurrences(of: "_", with: " ").capitalized } ?? "Thinking")
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
             }
             .padding(.top, 14)
+            .transition(.opacity.combined(with: .offset(y: 6)))
         }
         Color.clear.frame(height: 0)
             .onChange(of: live.reduce(0) { $0 + $1.text.utf8.count + $1.thinking.utf8.count }) { onGrow() }
@@ -1306,14 +1359,20 @@ struct ChatComposer: View {
 
     var body: some View {
         let draft = ComposerDraft.draft(for: threadID)
+        // One line until there is more to say: attach, the words, send. The field grows
+        // upwards and the two buttons stay on its last line.
         VStack(alignment: .leading, spacing: 8) {
             PendingFiles(draft: draft)
-            ComposerField(draft: draft, placeholder: placeholder)
-            ComposerFoot(draft: draft)
+            HStack(alignment: .bottom, spacing: 10) {
+                ComposerFoot(draft: draft, part: .attach).padding(.bottom, 1)
+                ComposerField(draft: draft, placeholder: placeholder)
+                ComposerFoot(draft: draft, part: .send)
+            }
         }
-        .padding(10)
-        .background(MC.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(MC.line.opacity(0.7), lineWidth: 0.5))
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(MC.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(MC.line.opacity(0.7), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.05), radius: 8, y: 2)
         .overlay(alignment: .top) {
             ComposerOptions(draft: draft).alignmentGuide(.top) { $0[.bottom] + 6 }
         }
@@ -1383,29 +1442,30 @@ private struct PendingFiles: View {
 private struct ComposerFoot: View {
     @Environment(Store.self) private var store
     let draft: ComposerDraft
+    let part: Part
+    enum Part { case attach, send }
 
     var body: some View {
-        HStack(spacing: 8) {
+        switch part {
+        case .attach:
             Button(action: pickFiles) {
-                Image(systemName: "paperclip").font(.system(size: 14)).contentShape(Rectangle())
+                Image(systemName: "paperclip").font(.system(size: 14)).frame(width: 20, height: 20).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .help("Attach a file")
             .accessibilityLabel("Attach a file")
-            Text("Enter to send · Shift Enter for a new line")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-            Spacer(minLength: 8)
+        case .send:
             Button { draft.send(store) } label: {
                 Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 20))
-                    .foregroundStyle(draft.canSend ? Color.accentColor : Color.secondary.opacity(0.4))
+                    .font(.system(size: 22))
+                    .foregroundStyle(draft.canSend ? Color.accentColor : Color.secondary.opacity(0.35))
+                    .scaleEffect(draft.canSend ? 1 : 0.92)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.6), value: draft.canSend)
             }
             .buttonStyle(.plain)
             .disabled(!draft.canSend)
-            .help("Send")
+            .help("Send (Return). Shift Return for a new line")
             .accessibilityLabel("Send")
         }
     }

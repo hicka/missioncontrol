@@ -53,23 +53,30 @@ struct ShellView: View {
 
 private struct Sidebar: View {
     @Environment(Store.self) private var store
+    @AppStorage("sidebar.more") private var moreOpen = false
+
+    private var inMore: Bool { [.activity, .schedule, .knowledge, .evolution, .modules].contains(store.route) }
+    private var modulesNeedYou: Int { store.modules.filter { ["failed", "pending"].contains($0.status.str) }.count }
 
     var body: some View {
         @Bindable var store = store
         List(selection: Binding<Route?>(get: { store.route }, set: { if let route = $0 { store.route = route; if case .chat(let id) = route { store.unread.remove(id) } } })) {
+            // What is used every day stays in view. The rest is one click further, and
+            // opens by itself when something in it wants attention.
             Section {
                 row("Home", "house", .home)
                 row("Inbox", "tray", .inbox, badge: store.inbox.count, tone: MC.warn)
                 row("Tasks", "checklist", .tasks, badge: store.openMissions.count)
+            }
+            Section("Chats") {
+                ForEach(store.threadRows) { thread in ThreadRow(thread: thread).tag(Route.chat(thread.id)) }
+            }
+            Section("More", isExpanded: Binding(get: { moreOpen || inMore || modulesNeedYou > 0 }, set: { moreOpen = $0 })) {
                 row("Activity", "bolt", .activity, badge: store.workingCount)
                 row("Schedule", "clock", .schedule, badge: store.activeWatchCount)
                 row("Knowledge", "book", .knowledge)
                 row("Evolution", "chart.line.uptrend.xyaxis", .evolution, badge: store.evolution.trial.int)
-                row("Modules", "puzzlepiece.extension", .modules,
-                    badge: store.modules.filter { ["failed", "pending"].contains($0.status.str) }.count, tone: MC.warn)
-            }
-            Section("Chats") {
-                ForEach(store.threadRows) { thread in ThreadRow(thread: thread).tag(Route.chat(thread.id)) }
+                row("Modules", "puzzlepiece.extension", .modules, badge: modulesNeedYou, tone: MC.warn)
             }
         }
         .listStyle(.sidebar)
@@ -106,11 +113,11 @@ private struct ThreadRow: View {
             if thread.kind.str == "dm" { AgentBadge(agent: store.agent(agentID), size: 20) } else { Image(systemName: "person.3").frame(width: 20) }
             VStack(alignment: .leading, spacing: 0) {
                 Text(thread.name.str).font(.system(size: 13)).lineLimit(1)
-                if let tool = store.tools[agentID] { Text(tool.replacingOccurrences(of: "_", with: " ")).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1) }
+                if store.isBusy(agentID) { Text(verbatim: store.doing(agentID)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1) }
             }
             Spacer()
             if store.unread.contains(thread.id) { Circle().fill(Color.accentColor).frame(width: 7, height: 7).accessibilityLabel("Unread") }
-            else if store.isBusy(agentID) { ProgressView().controlSize(.mini).accessibilityLabel("Working") }
+            else if store.isBusy(agentID) { Spinner(size: 10).accessibilityLabel("Working") }
         }
     }
 }

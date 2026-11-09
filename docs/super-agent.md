@@ -101,6 +101,15 @@ a failed delivery and the tunnel's address changes when it restarts.
   the message does not leave what is said of the report with nobody to hear it.
 - A Worker's question stays on the session until answered: on the Router's board, in
   `/tasks` and in the Inbox, where it can be answered directly.
+- Work shows as it is done. `GET /api/work` gives each task a conversation started: who has it,
+  what they are doing this moment (thinking, working, fixing after a failed step, waiting and on
+  what, or needing the owner), its steps and its finish line. A tool call can carry a `note`, a
+  few plain words on what the step is for, and each live `execution` event carries the line a
+  person reads. The Mac app draws these as a card in the conversation that fills in step by step
+  and folds to one line when the task ends.
+- Things that have an address are linked. Workers give the address of what a report names (a
+  pull request, an issue, a build, a page) and the Router keeps it as a link on the name. Nothing
+  is built from a pattern: an address is only ever one a Worker saw.
 - Words the Router writes with nobody waiting are handed back once, because it believes it
   has said them. An empty ending with the owner waiting is asked again, then says so.
 

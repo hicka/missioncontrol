@@ -998,8 +998,10 @@ private struct StepTrail: View {
                 if let now = steps.last(where: { $0.status.str == "running" }) {
                     let input = now.detail.arguments
                     let what = input.command.optStr ?? input.path.optStr ?? input.url.optStr ?? input.query.optStr ?? ""
-                    Text(clip(oneLine([now.name.str, what].filter { !$0.isEmpty }.joined(separator: " · ")), 56))
-                        .font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+                    // The words the agent gave the step, when it gave any. The command otherwise.
+                    let named = now.label.optStr.map { !$0.isEmpty } ?? false
+                    Text(clip(oneLine(named ? now.label.str : [now.name.str, what].filter { !$0.isEmpty }.joined(separator: " · ")), 56))
+                        .font(.system(size: 10.5, design: named ? .default : .monospaced)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
                 } else {
                     Text(plural(steps.count, "step")).font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.5))
                 }

@@ -166,6 +166,12 @@ final class Store {
     /// Held commands the conversation draws as cards, by id, as the server last said.
     var approvalCards: [String: JSON] = [:]
 
+    /// Tasks the conversations started, each with a model of its own so that a step
+    /// arriving redraws one card. `workRefs` only changes when a task appears or goes.
+    var workRefs: [WorkRef] = []
+    @ObservationIgnored private(set) var workModels: [String: WorkModel] = [:]
+    @ObservationIgnored private var workTask: Task<Void, Never>?
+
     var states: [String: String] = [:]
     var tools: [String: String] = [:]
     var streams: [String: StreamText] = [:]
@@ -186,6 +192,11 @@ final class Store {
     var homeComposer: HomeComposerRequest?
     struct HomeComposerRequest: Equatable { let id = UUID(); var text: String? }
 
+    @ObservationIgnored private var openAt: String? = {
+        let arguments = CommandLine.arguments
+        guard let index = arguments.firstIndex(of: "--open"), arguments.indices.contains(index + 1) else { return nil }
+        return arguments[index + 1]
+    }()
     @ObservationIgnored private var threadCache: [String: ThreadModel] = [:]
     @ObservationIgnored private let stream = EventStream()
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
@@ -220,6 +231,7 @@ final class Store {
         Task {
             await refreshState()
             await refresh()
+            await loadWork()
             await loadModules()
             for model in threadCache.values where model.loaded && model.atLatest { if let api { await model.load(api) } }
         }
@@ -257,6 +269,18 @@ final class Store {
         if next != agents { agents = next }
         if state.user != user { user = state.user }
         if state.threads.list != threadRows { threadRows = state.threads.list }
+        // `--open chat` (or inbox, tasks, activity) starts on that screen: for looking at
+        // one while working on it, and for a shortcut that opens straight into the chat.
+        if let wanted = openAt, !agents.isEmpty {
+            openAt = nil
+            switch wanted {
+            case "chat": if let leadThread { route = .chat(leadThread) }
+            case "inbox": route = .inbox
+            case "tasks": route = .tasks
+            case "activity": route = .activity
+            default: break
+            }
+        }
     }
 
     /// The projection every workspace screen draws from.
@@ -329,6 +353,7 @@ final class Store {
             if record.kind.str == "tool" {
                 if record.status.str == "running" { tools[record.agent.str] = record.name.str }
                 else if tools[record.agent.str] == record.name.str { tools[record.agent.str] = nil }
+                stepArrived(record)
             }
         case "agent_state":
             states[event.agent.str] = event.state.str
@@ -342,11 +367,13 @@ final class Store {
         case "session_updated":
             ticks.kernel += 1
             refreshSoon()
+            workSoon()
         case "trigger", "watchdog", "kernel_updated":
             ticks.kernel += 1
         case "mission_updated":
             ticks.kernel += 1
             refreshSoon()
+            workSoon()
         case "evolution_updated":
             ticks.evolution += 1
             refreshSoon()
@@ -364,10 +391,12 @@ final class Store {
             refreshSoon()
         case "approvals_updated":
             refreshSoon()
+            workSoon()
             let shown = Array(approvalCards.keys)
             Task { for id in shown { await loadApproval(id) } }
         case "watch_updated", "cron_updated":
             refreshSoon()
+            workSoon()
         case "modules_updated", "module_cards":
             Task { await loadModules() }
         case "module_card":
@@ -384,6 +413,69 @@ final class Store {
         default:
             break
         }
+    }
+
+    // MARK: Work as it happens
+
+    func loadWork() async {
+        guard let api, let reply = try? await api.get("/api/work?limit=30") else { return }
+        let tasks = reply.tasks.list.map(WorkTask.init)
+        for task in tasks {
+            if let model = workModels[task.id] { if model.task != task { model.task = task } }
+            else { workModels[task.id] = WorkModel(task) }
+        }
+        let known = Set(tasks.map(\.id))
+        for id in workModels.keys where !known.contains(id) { workModels[id] = nil }
+        let refs = tasks.map { WorkRef(id: $0.id, thread: $0.thread, started: $0.started) }
+        if refs != workRefs { workRefs = refs }
+    }
+
+    func workSoon(after delay: Double = 0.2) {
+        workTask?.cancel()
+        workTask = Task {
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            if !Task.isCancelled { await loadWork() }
+        }
+    }
+
+    func work(in thread: String) -> [WorkRef] { workRefs.filter { $0.thread == thread } }
+    /// Moves whenever a card in this conversation gains a step or changes what it says.
+    func workSize(in thread: String) -> Int {
+        workRefs.filter { $0.thread == thread }.compactMap { workModels[$0.id]?.task }
+            .reduce(0) { $0 &+ $1.steps.count &* 31 &+ $1.phase.count &+ ($1.live ? 7 : 0) }
+    }
+    /// What a profile is on right now, in words: the step it named, or how it is thinking.
+    func doing(_ agentID: String) -> String {
+        if let task = workModels.values.map(\.task).first(where: { $0.live && $0.agent == agentID }) { return task.phaseLine }
+        if states[agentID] == "thinking" { return "Thinking" }
+        return tools[agentID].map { $0.replacingOccurrences(of: "_", with: " ").capitalized } ?? "Working"
+    }
+    /// Tasks this conversation has under way right now.
+    func liveWork(in thread: String) -> [WorkTask] {
+        workRefs.filter { $0.thread == thread }.compactMap { workModels[$0.id]?.task }.filter(\.live)
+    }
+
+    /// A tool call started or ended. The card it belongs to takes it at once; the server's
+    /// account of the task follows a moment later and settles anything this guessed.
+    private func stepArrived(_ record: JSON) {
+        let mission = record.mission.str
+        guard !mission.isEmpty else { return }
+        guard let model = workModels[mission] else { workSoon(after: 0.05); return }
+        if !record.quiet.flag, !record.label.str.isEmpty {
+            var task = model.task
+            let step = WorkStep(record)
+            if let index = task.steps.firstIndex(where: { $0.id == step.id }) { task.steps[index] = step }
+            else { task.steps.append(step) }
+            if step.status == "running" {
+                let before = task.steps.dropLast().last { $0.tool != "report" }
+                task.phase = before?.status == "failed" ? "fixing" : "working"
+            } else if task.phase == "working" || task.phase == "fixing" {
+                task.phase = "thinking"
+            }
+            task.updated = Date().timeIntervalSince1970
+            model.task = task
+        }
+        workSoon(after: 0.6)
     }
 
     private func receive(_ message: Message) {
@@ -437,7 +529,7 @@ final class Store {
     }
 
     func stopWorker(_ id: String) async {
-        do { _ = try await api?.post("/api/kernel/sessions/\(API.escape(id))/stop"); refreshSoon(after: 0.1) }
+        do { _ = try await api?.post("/api/kernel/sessions/\(API.escape(id))/stop"); refreshSoon(after: 0.1); workSoon(after: 0.1) }
         catch { notify(error.localizedDescription, error: true) }
     }
 

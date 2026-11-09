@@ -558,6 +558,8 @@ async def control_snapshot():
         asyncio.to_thread(db.list_watches), asyncio.to_thread(skills_mod.list_skills),
         asyncio.to_thread(db.recent_activity), asyncio.to_thread(db.knowledge_counts),
         _inbox(), asyncio.to_thread(_evolution_summary), asyncio.to_thread(db.list_cron))
+    import workview
+    executions = [workview.labelled(e) for e in executions]
     running = {}
     for e in executions:
         if e["status"] == "running" and e["kind"] == "tool":
@@ -1070,6 +1072,13 @@ async def kernel_session(sid: str):
     return {"session": row, "subscriptions": subscriptions, "reports": reports, "jobs": jobs,
             "inbox": len(inbox), "transcript": log,
             "findings": await asyncio.to_thread(kernel.findings, 20, sid)}
+
+
+@app.get("/api/work")
+async def work_in_progress(thread: str = "", limit: int = 12):
+    """The tasks a conversation started, with their steps, for drawing work as it happens."""
+    import workview
+    return {"tasks": await asyncio.to_thread(workview.view, orch, thread, max(1, min(limit, 40)))}
 
 
 class StepInBody(BaseModel):

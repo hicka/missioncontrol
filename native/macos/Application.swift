@@ -87,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func buildWindow() {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 820), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
-        window.title = "Mission Control"; window.minSize = NSSize(width: 860, height: 560); window.delegate = self
+        window.title = "Mission Control"; window.titleVisibility = .hidden; window.minSize = NSSize(width: 860, height: 560); window.delegate = self
         window.titlebarAppearsTransparent = true; window.isReleasedWhenClosed = false
         window.contentViewController = NSHostingController(rootView: ShellView(runtime: model).environment(store))
         window.setContentSize(NSSize(width: 1240, height: 820))
