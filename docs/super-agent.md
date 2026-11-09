@@ -271,6 +271,23 @@ checkout count as someone's, so a Worker that finds them gets a copy rather than
   not in any system prompt, for that reason: each batch starts with the time. Cached input is
   counted apart, and counts for a tenth in the daily budget.
 - A cut in a tool result says so. `job` and `recall` take an offset to read the rest.
+- A session's opening context is chosen for its task. Memory is searched by match, then by what
+  kind of note it is (a rule, a decision or a lesson outranks a line of the event log) and its
+  age, and one fact in two wordings is shown once. The owner's standing rules go in whole while
+  they fit; past that, the ones the task touches go first and the rest are counted out loud.
+  Skills the task matches are described; the others are named. A dependency bot's open PRs are a
+  count. What is said again each time a Worker wakes is only what can have changed.
+- `remember` updates a note that already says nearly the same thing instead of adding another.
+  Anything with a number in it has to match exactly, so "#522 merged" never replaces "#523 merged".
+- The heartbeat looks less often when there is nothing to find: with no work under way and
+  nothing new since the last pulse, pulses come four times further apart (`heartbeat.quiet_stretch`,
+  1 to switch that off). Anything happening brings them straight back.
+- Learning looks at how a task went and whether it keeps coming back. The trail marks the calls
+  that failed, the reflection is told when this profile has done the same kind of task before,
+  and a procedure learned a second time revises the first skill instead of sitting beside it.
+  Lessons learned from failures have their own places, which the owner's rules do not use up; one
+  on trial is not pushed out before it has had its time, an agent's own lessons keep half the
+  room in its prompt, and a lesson nobody was shown is not adopted for what it did not prevent.
 - Once a day the Watchdog deletes what nothing reads any more: messages sent over a week ago,
   mail taken and transcript rows compacted away over a month ago, and tool-call records over
   two months old. Events are kept, because telling a new one from a repeat rests on them.

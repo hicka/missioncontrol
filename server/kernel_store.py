@@ -554,6 +554,22 @@ def log_prune(before: float) -> int:
         return cur.rowcount
 
 
+def anything_since(since: float) -> bool:
+    """Whether there is anything a pulse could find: work under way, or something that
+    happened since the last one. Events that were ignored, earlier pulses and reports that
+    nothing needed doing are not that."""
+    with db._lock:
+        c = _ensure()
+        # Not one that is blocked: that waits on a person, for as long as they take.
+        if c.execute("SELECT 1 FROM sessions WHERE kind='worker' AND status IN "
+                     "('queued','working','waiting','stalled') LIMIT 1").fetchone():
+            return True
+        if c.execute("SELECT 1 FROM triggers WHERE ts>? AND source!='heartbeat' AND "
+                     "disposition NOT IN ('ignored','logged','refused') LIMIT 1", (since,)).fetchone():
+            return True
+        return bool(c.execute("SELECT 1 FROM reports WHERE ts>? AND status!='dropped' LIMIT 1", (since,)).fetchone())
+
+
 def prune(now: float) -> dict:
     """What nothing reads any more. None of it was ever deleted: messages already sent,
     mail already taken, transcript rows a compaction had replaced, and every tool call

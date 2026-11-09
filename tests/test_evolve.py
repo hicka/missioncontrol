@@ -156,14 +156,67 @@ def test_a_near_duplicate_is_refused_and_the_owner_skips_the_trial(isolated):
     assert mine["status"] == "active" and mine["pinned"]
 
 
-def test_a_full_scope_makes_room_from_its_oldest_trial(isolated, monkeypatch):
-    monkeypatch.setattr(evolve, "MAX_LESSONS", 3)
+def _aged(lesson, days):
+    with evolve.db._lock:
+        c = evolve._ensure()
+        c.execute("UPDATE lessons SET ts=? WHERE id=?", (time.time() - days * 86400, lesson["id"]))
+        c.commit()
+
+
+def test_a_full_scope_makes_room_from_a_trial_that_has_had_its_time(isolated, monkeypatch):
+    monkeypatch.setattr(evolve, "MAX_LESSONS", 2)
     a = evolve.add_lesson("cto", "Always cite the PR number when reporting a CI result.", "correction")
     evolve.add_lesson("cto", "Check CI status with gh run view before announcing a build result.", "correction")
-    evolve.add_lesson("cto", "Report the Envoyer job id with every status update.", "owner")
-    evolve.add_lesson("cto", "Open pull requests against master, never the mobile branch.",
-                      "correction")
+    # Both are new. Pushing one out untested is how the same lesson came to be learned
+    # five nights running, each time evicting the last.
+    with pytest.raises(ValueError, match="long enough"):
+        evolve.add_lesson("cto", "Open pull requests against master, never the mobile branch.", "correction")
+    assert evolve.get_lesson(a["id"])["status"] == "trial"
+    _aged(a, evolve.TRIAL_DAYS + 1)
+    evolve.add_lesson("cto", "Open pull requests against master, never the mobile branch.", "correction")
     assert evolve.get_lesson(a["id"])["status"] == "retired"
+
+
+def test_the_owners_rules_do_not_use_up_the_places_for_what_was_learned(isolated, monkeypatch):
+    monkeypatch.setattr(evolve, "MAX_LESSONS", 2)
+    for text in ("Report times in Maldives time, never raw UTC.", "Never deploy on a Friday afternoon.",
+                 "Ask before preparing any marketing post."):
+        evolve.add_lesson("*", text, "owner-rule")
+    first = evolve.add_lesson("*", "Quote paths that contain spaces in shell commands.", "failure")
+    second = evolve.add_lesson("*", "Use gh pr view --json for check status, not the web page.", "failure")
+    assert first["status"] == second["status"] == "trial"
+    assert evolve.get_lesson(first["id"])["status"] == "trial"
+
+
+def test_a_lesson_the_team_already_has_is_not_kept_again_for_one_agent(isolated):
+    evolve.add_lesson("*", "Use the Herd php binary for PHP work and tests, never the Homebrew one.", "owner-rule")
+    with pytest.raises(ValueError, match="already covered"):
+        evolve.add_lesson("webdev", "Use the Herd php binary for PHP and tests, not the Homebrew one.", "owner-rule")
+
+
+def test_an_agents_own_lessons_keep_half_the_room_in_its_prompt(isolated, monkeypatch):
+    monkeypatch.setattr(evolve, "PROMPT_CHARS", 400)
+    for text in ("Report times in Maldives time, never raw UTC, in every status line.",
+                 "Quote any path that contains spaces whenever it appears in a shell command.",
+                 "Screenshots for the stores come from the demo data set, never a customer's.",
+                 "Invoices keep their original currency; convert only in the summary table.",
+                 "Weekly numbers start on Sunday and are compared with the same week last year.",
+                 "Translations are checked by a native speaker before they ship to anyone."):
+        evolve.add_lesson("*", text, "owner-rule")
+    mine = evolve.add_lesson("cto", "Read the failing test output in full before changing any code for it.", "correction")
+    shown = [l["id"] for l in evolve.for_prompt("cto")]
+    assert mine["id"] in shown and len(shown) >= 3
+    assert sum(len(l["text"]) + 16 for l in evolve.for_prompt("cto")) <= 400
+
+
+def test_a_trial_nobody_was_shown_is_not_adopted_for_having_prevented_nothing(isolated, monkeypatch):
+    monkeypatch.setattr(evolve, "PROMPT_CHARS", 120)
+    evolve.add_lesson("cto", "Owner rule that takes up the whole of the small prompt budget in this test.", "owner")
+    hidden = evolve.add_lesson("cto", "Read the failing test output in full before changing any code for it.", "correction")
+    _aged(hidden, evolve.TRIAL_MAX_DAYS + 1)
+    assert not evolve.shown(evolve.get_lesson(hidden["id"]))
+    evolve.evaluate_trials()
+    assert evolve.get_lesson(hidden["id"])["status"] == "trial"
 
 
 def test_lessons_reach_the_prompt_within_budget(isolated, monkeypatch):
@@ -466,3 +519,23 @@ def test_a_message_read_live_is_not_read_again_by_the_backfill(isolated):
     assert evolve.note_owner_message("cto", "dm:cto", msg["id"], msg["text"]) is None
     assert evolve.backfill() == 0
     assert len(evolve.feedback(10)) == 1
+
+
+def test_a_trial_nobody_was_shown_is_not_retired_for_failing_to_help_either(isolated, monkeypatch):
+    monkeypatch.setattr(evolve, "PROMPT_CHARS", 120)
+    evolve.add_lesson("cto", "Owner rule that takes up the whole of the small prompt budget in this test.", "owner")
+    hidden = evolve.add_lesson("cto", "Read the failing test output in full before changing any code for it.", "correction")
+    monkeypatch.setattr(evolve, "_recurrences", lambda lesson: 5)
+    out = evolve.evaluate_trials()
+    assert evolve.get_lesson(hidden["id"])["status"] == "trial" and not out["retired"]
+
+
+def test_rules_a_model_took_from_the_owners_words_have_a_limit_and_their_own_do_not(isolated, monkeypatch):
+    monkeypatch.setattr(evolve, "MAX_LESSONS", 1)
+    texts = ("Report times in Maldives time, never raw UTC.", "Quote any path that contains spaces in a command.",
+             "Weekly numbers start on a Sunday every time.")
+    evolve.add_lesson("*", texts[0], "owner-rule")
+    evolve.add_lesson("*", texts[1], "owner-rule")
+    with pytest.raises(ValueError, match="retire one first"):
+        evolve.add_lesson("*", texts[2], "owner-rule")
+    assert evolve.add_lesson("*", texts[2], "owner")["status"] == "active"

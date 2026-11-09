@@ -4825,7 +4825,7 @@ def test_a_trail_a_stranger_had_a_hand_in_is_not_learned_from_when_the_owner_spe
         aid = _limited(monkeypatch, o)
         learned = []
 
-        async def learn(profile, trail, skills):
+        async def learn(profile, trail, skills, title=""):
             learned.append(list(trail))
 
         monkeypatch.setattr(o, "_maybe_learn", learn)
@@ -5048,7 +5048,7 @@ def test_only_the_stretch_that_finishes_counts_and_is_learned_from(isolated, mon
         aid = _limited(monkeypatch, o)
         learned = []
 
-        async def learn(profile, trail, skills):
+        async def learn(profile, trail, skills, title=""):
             learned.append(list(trail))
 
         monkeypatch.setattr(o, "_maybe_learn", learn)
@@ -5654,3 +5654,26 @@ def test_two_clearing_up_after_one_session_pass_a_message_on_once(isolated):
     store.inbox_put(row["id"], "trigger", "owner: wait", "tr_x", {"from_owner": True})
     assert [i["ref"] for i in store.inbox_claim_unread(row["id"])] == ["tr_x"]
     assert store.inbox_claim_unread(row["id"]) == []
+
+
+def test_the_owners_rules_survive_compaction_and_a_changed_one_is_said_on_waking(isolated, monkeypatch):
+    model = Hold(monkeypatch, worker=[call("report", status="waiting", summary="watching")])
+
+    async def main():
+        o = make(monkeypatch)
+        db.add_memory("owner", "Never deploy on a Friday afternoon.", "rule")
+        row = await o.workers.spawn(second(o), "Ship the fix", "", [asked(o)])
+        await until(lambda: model.worker_calls)
+        worker = o.workers.live[row["id"]]
+        assert "Never deploy on a Friday afternoon." in seen(model.worker_calls[0])     # the opening context
+        assert "Never deploy on a Friday afternoon." in worker.pinned()                 # and what outlives it
+        monkeypatch.setattr(o, "refresh_current_state", AsyncMock())
+        worker.state_told = 0
+        await worker._state_on_waking()                       # nothing changed: the state alone
+        assert not any("rules have changed" in i["text"] for i in store.inbox_pending(row["id"]))
+        db.add_memory("owner", "Ask before any marketing post is prepared.", "rule")
+        worker.state_told = 0
+        await worker._state_on_waking()
+        assert any("rules have changed" in i["text"] and "marketing post" in i["text"] for i in store.inbox_pending(row["id"]))
+        await wind_down(o)
+    asyncio.run(main())

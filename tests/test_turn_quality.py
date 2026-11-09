@@ -320,3 +320,220 @@ def test_a_reply_that_keeps_getting_cut_off_says_so(isolated, monkeypatch):
     assert asyncio.run(worker.run()) == "waiting"
     summaries = " ".join(r["summary"] for r in kernel_store.reports_of(sid))
     assert "cut off at the output limit" in summaries and "Say continue" in summaries
+
+
+# ---------- memory that is found, said once, and sized to the task ----------
+
+def test_what_was_decided_outranks_a_log_line_that_matches_as_well(isolated):
+    db.add_memory("github", "acmeshop PR #41 merged: php tests moved to the herd binary in CI", "github-event")
+    db.add_memory("github", "acmeshop PR #42 opened: php tests herd binary path", "pr")
+    rule = db.add_memory("cto", "Always run php tests with the Herd binary, not the Homebrew one.", "rule")
+    assert db.search_memories("which php binary runs the tests", 3)[0]["id"] == rule
+
+
+def test_one_fact_in_two_wordings_is_found_once_and_numbers_keep_notes_apart(isolated):
+    assert db.same_note("Always use Herd's php bin for PHP work and tests.",
+                        "always use Herd's PHP bin for tests and for PHP work")
+    # One word is a different note. A review of a looser version of this found it would
+    # have replaced the first of each pair with the second.
+    for a, b in (("acmeshop PR #522 merged and deployed", "acmeshop PR #523 merged and deployed"),
+                 ("Always ask the owner before merging any PR into master on public repos",
+                  "Never ask the owner before merging any PR into master on public repos"),
+                 ("Send the weekly report to Alice every Monday morning", "Send the weekly report to Bob every Monday morning"),
+                 ("Merge dependabot PRs on the public repos without asking",
+                  "Never merge dependabot PRs on the public repos without asking"),
+                 ("Never deploy on Fridays.", "Never deploy on Mondays.")):
+        assert not db.same_note(a, b), (a, b)
+    db.add_memory("cto", "Always use Herd's php bin for PHP work and tests.", "rule")
+    db.add_memory("webdev", "always use Herd's PHP bin for tests and for PHP work", "rule")
+    assert len(db.search_memories("herd php bin tests", 5)) == 1
+    assert len(db.search_memories("herd php bin tests", 5, repeats=True)) == 2
+
+
+def test_the_recent_notes_are_what_people_wrote_down_not_the_event_log(isolated):
+    db.add_memory("cto", "The owner prefers one PR per fix.", "fact")
+    for n in range(12):
+        db.add_memory("github", f"acmeshop PR #{n} merged", "github-event")
+    assert [m["kind"] for m in db.list_recent_notes(6)] == ["fact"]
+
+
+def test_a_rule_saved_twice_is_shown_once_and_the_task_decides_what_fits(isolated, monkeypatch):
+    o = orchestrator.Orchestrator()
+    first = db.add_memory("cto", "Always use Herd's php bin for PHP work and tests.", "rule")
+    second = db.add_memory("webdev", "always use Herd's PHP bin for tests and for PHP work", "rule")
+    lines = o._rules_block(db.list_memories_by_kind("rule"))
+    assert "standing rules (1)" in lines[0] and f"[{second}] (also [{first}])" in lines[1]
+    for words in ("invoices keep their original currency", "translations get a native reader first",
+                  "store screenshots come from demo data", "weekly numbers start on a Sunday",
+                  "holiday cover is agreed a month ahead"):
+        db.add_memory("cto", f"{words}. " + " ".join(f"{w}{n}" for n in range(12) for w in words.split()[:3]), "rule")
+    monkeypatch.setattr(orchestrator.Orchestrator, "RULES_CHARS", 700)
+    by_age = "\n".join(o._rules_block(db.list_memories_by_kind("rule")))
+    by_task = "\n".join(o._rules_block(db.list_memories_by_kind("rule"), "fix the failing php tests"))
+    assert "Herd" not in by_age and "Herd" in by_task        # the oldest rule, and the one this task needs
+    assert "more standing rules did not fit" in by_task
+
+
+def test_saving_what_is_already_known_updates_it_instead_of_adding_to_it(isolated, monkeypatch):
+    import asyncio
+
+    async def main():
+        o = orchestrator.Orchestrator()
+        first = await o._dispatch_tool(o.lead, ".", "remember", {"text": "Staging deploys run from the release branch only.", "kind": "fact"})
+        again = await o._dispatch_tool(o.lead, ".", "remember", {"text": "staging deploys: only run from the release branch", "kind": "fact"})
+        other = await o._dispatch_tool(o.lead, ".", "remember", {"text": "Production deploys run from the release branch only.", "kind": "fact"})
+        number = lambda said: int(said.split("[")[1].split("]")[0])
+        assert "already said this" in again and number(first) == number(again)
+        assert "already" not in other
+        notes = db.list_recent_notes(10)
+        assert len(notes) == 2 and any("staging deploys: only" in m["text"] for m in notes)
+        # Someone else's note is not reworded by a session the owner is not behind.
+        theirs = db.add_memory("owner", "Invoices keep their original currency.", "decision")
+        said = await o._dispatch_tool(o.lead, ".", "remember", {"text": "invoices: keep their ORIGINAL currency", "kind": "decision"})
+        assert "already" not in said
+        assert [m["text"] for m in db.list_memories(50) if m["id"] == theirs] == ["Invoices keep their original currency."]
+    asyncio.run(main())
+
+
+def test_a_session_is_told_of_the_skills_its_task_touches_and_only_names_the_rest(isolated, monkeypatch):
+    import skills
+    o = orchestrator.Orchestrator()
+    skills.save_skill("cto", "Watch an Envoyer deploy to completion", "Use when a production deploy was started through Envoyer and someone must know how it ended.", "1. list deployments\n2. poll the newest\n3. report the result", "starting a deploy")
+    skills.save_skill("cto", "Capture store screenshots on the simulator", "Use to get app screenshots from demo data on the iOS simulator.", "1. boot\n2. seed\n3. capture", "uploading them")
+    context = o._work_context(o.lead, "merge the fix and watch the envoyer deploy")
+    described = context.split("TEAM SKILLS that match this task")[1].split("Other team skills")[0]
+    assert "watch-an-envoyer-deploy-to-completion" in described and "simulator" not in described
+    assert "capture-store-screenshots-on-the-simulator" in context.split("Other team skills")[1]
+    assert "TEAM SKILLS (skill read to inspect one" in o._work_context(o.lead, "write a poem about the sea")
+
+
+def test_a_skill_name_cut_at_a_hyphen_is_still_one_skill(isolated):
+    import skills
+    name = "replace google play phone screenshots via android publisher api again"
+    assert not skills._slug(name).endswith("-") and skills._slug(skills._slug(name)) == skills._slug(name)
+
+
+def test_a_procedure_learned_a_second_time_revises_the_first(isolated, monkeypatch):
+    import asyncio, json, skills
+
+    async def main():
+        o = orchestrator.Orchestrator()
+        skills.save_skill("cto", "Watch an Envoyer deploy to completion", "Use when a production deploy was started through Envoyer and someone must know how it ended.", "1. list deployments\n2. poll the newest\n3. report the result")
+        other = json.dumps({"action": "new", "name": "Watch an Envoyer deploy to staging",
+                            "description": "Use when a staging deploy was started through Envoyer and someone must know how it ended.",
+                            "content": "1. list staging deployments\n2. poll the newest one until it ends\n3. report the result to the owner"})
+        assert (await o._apply_learning_inner(o.lead, other)).startswith("learned:")       # a different skill stays one
+        skills.delete_skill("watch-an-envoyer-deploy-to-staging")
+        raw = json.dumps({"action": "new", "name": "Watch the Envoyer deploy to completion",
+                          "description": "Use when a production deploy was started through Envoyer and someone must know how it ended.",
+                          "content": "1. poll the newest deployment every 20 seconds\n2. stop at finished or failed\n3. say which server it ended on"})
+        assert (await o._apply_learning_inner(o.lead, raw)).startswith("revised:watch-an-envoyer-deploy-to-completion")
+        assert len(skills.list_skills()) == 1 and "every 20 seconds" in skills.read_skill("watch-an-envoyer-deploy-to-completion")
+    asyncio.run(main())
+
+
+def test_dependency_bot_prs_are_a_count_and_the_rest_lose_their_addresses(isolated, monkeypatch):
+    import asyncio, processes, settings as cfg
+    prs = [{"number": 7, "title": "Fix the null crash", "headRefName": "fix/null", "baseRefName": "main",
+            "url": "https://github.com/acme/shop/pull/7", "isDraft": False, "state": "OPEN"}] + [
+           {"number": n, "title": f"deps: bump thing-{n}", "headRefName": f"dependabot/npm_and_yarn/thing-{n}",
+            "baseRefName": "main", "url": f"https://github.com/acme/shop/pull/{n}", "isDraft": False, "state": "OPEN"}
+           for n in (11, 12, 13)]
+
+    class Proc:
+        returncode = 0
+
+        async def communicate(self):
+            return json.dumps(prs).encode(), b""
+
+    async def fake(*args, **kwargs):
+        return Proc()
+    monkeypatch.setattr(processes, "create_subprocess_exec", fake)
+    monkeypatch.setattr(cfg, "load", lambda: {"github": {"repos": ["acme/shop"]}})
+
+    async def main():
+        text = await orchestrator.Orchestrator()._current_state_block()
+        assert "#7 open `fix/null` -> `main`: Fix the null crash" in text and "https://" not in text
+        assert "acme/shop: 3 dependency updates (#11, #12, #13)" in text and "bump thing" not in text
+        assert "standing rules" not in text       # those go with each session's own context now
+    asyncio.run(main())
+
+
+def test_only_those_with_a_browser_are_told_how_to_read_one(isolated):
+    o = orchestrator.Orchestrator()
+    aid = o.lead
+    o.agents[aid]["tools"] = ["terminal"]
+    assert "BROWSER EVIDENCE" not in o._system_prompt(aid)
+    o.agents[aid]["tools"] = ["terminal", "browser"]
+    assert "BROWSER EVIDENCE" in o._system_prompt(aid)
+    o.agents[aid]["tools"] = None
+    assert "BROWSER EVIDENCE" in o._system_prompt(aid)
+
+
+def test_learning_is_told_when_a_kind_of_task_keeps_coming_back(isolated, monkeypatch):
+    import asyncio
+    import kernel_store as store
+
+    async def main():
+        o = orchestrator.Orchestrator()
+        aid = o.lead
+        for n in (501, 502, 503):
+            store.session_create("worker", aid, title=f"Review shop PR {n}", status="ended")
+        store.session_create("worker", aid, title="Write the release notes", status="ended")
+        earlier = o._done_before(aid, "Review shop PR 504")
+        assert len(earlier) == 3 and all("Review" in t for t in earlier)
+        assert o._done_before(aid, "Deploy") == []
+        asked = {}
+
+        async def quick(system, user, **kwargs):
+            asked["system"], asked["user"] = system, user
+            return '{"action": "none"}'
+        monkeypatch.setattr(orchestrator.llm, "quick", quick)
+        monkeypatch.setattr(o, "_autolearn_on", lambda: True)
+        monkeypatch.setattr(o, "_learn_gate", AsyncMock(return_value=(True, "")))
+        monkeypatch.setattr(orchestrator.runtime_store, "decision_outcome", lambda *a: None)
+        await o._maybe_learn(aid, ["terminal: gh pr view 504", "terminal: gh pr diff 504", "terminal: gh pr review 504"],
+                             [], "Review shop PR 504")
+        assert "KEEPS COMING BACK" in asked["user"] and "4th time" in asked["user"]
+        assert "never for this one instance" in asked["system"]
+        assert o._learn_gate.call_args.args[-1] == earlier
+    asyncio.run(main())
+
+
+def test_the_trail_says_which_calls_failed(isolated, monkeypatch):
+    import asyncio
+
+    async def main():
+        o = orchestrator.Orchestrator()
+        aid = o.lead
+        ctx = o._ctx(aid)
+        ctx.trail.clear()
+
+        async def execute(aid, name, args, run, call_id=None):
+            await run()
+            return harness.ToolResult("exit 1\nfatal: not a git repository", "failed") if "status" in args["command"] else harness.ToolResult("exit 0", "completed")
+        monkeypatch.setattr(o.harness, "execute", execute)
+        monkeypatch.setattr(o, "_dispatch_tool", AsyncMock(side_effect=lambda aid, cwd, name, args: ctx.trail.append(f"{name}: {args['command']}")))
+        await o._exec_tool(aid, ".", "terminal", {"command": "git status"})
+        await o._exec_tool(aid, ".", "terminal", {"command": "ls"})
+        assert ctx.trail == ["terminal: git status  -> FAILED: exit 1 fatal: not a git repository", "terminal: ls"]
+    asyncio.run(main())
+
+
+def test_a_skill_folder_named_before_names_were_trimmed_can_still_be_read_and_removed(isolated):
+    import skills
+    skills.save_skill("cto", "Replace store screenshots", "Use to replace store screenshots.", "1. a\n2. b\n3. c")
+    old = skills.SKILLS_DIR / "replace-store-screenshots-"
+    (skills.SKILLS_DIR / "replace-store-screenshots").rename(old)
+    assert skills.slug_for("replace-store-screenshots-") == "replace-store-screenshots-"
+    assert skills.read_skill("replace-store-screenshots-")
+    assert skills.delete_skill("replace-store-screenshots-") and not old.exists()
+
+
+def test_a_job_that_runs_on_a_timetable_is_not_the_same_work_being_done_again(isolated):
+    import kernel_store as store
+    o = orchestrator.Orchestrator()
+    for _ in range(4):
+        row = store.session_create("worker", o.lead, title="Feature announcements check", status="ended")
+        store.session_set(row["id"], meta={"source": "cron", "one_shot": True})
+    assert o._done_before(o.lead, "Feature announcements check") == []

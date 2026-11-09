@@ -177,8 +177,32 @@ def _fts_query(text: str, max_terms: int = 14) -> str:
     return " OR ".join(terms)
 
 
-def search_memories(query_text: str, limit: int = 10) -> list[dict]:
-    """BM25 retrieval over the ENTIRE memory store, any age."""
+# Written by the system as things happen: a line per GitHub event, PR and deploy. They are
+# two thirds of the store, and worth finding when asked about, but they are a log and not
+# what anyone decided or learned.
+EVENT_KINDS = ("github-event", "pr", "deploy")
+# What somebody settled or learned outranks what merely happened, at the same match.
+_KIND_WEIGHT = {"rule": 1.6, "decision": 1.4, "lesson": 1.3}
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[^\W_]+(?:[./#-][^\W_]+)*", (text or "").casefold(), re.UNICODE)
+            if (len(w) > 1 or w.isdigit()) and w not in _STOPWORDS}      # "rule 3" is not "rule 4"
+
+
+def same_note(a: str, b: str) -> bool:
+    """Two notes made of the same words: the same thing said again, with the order, the
+    case, the punctuation or the small words changed. Nothing looser. One word is the whole
+    difference between "always ask before merging" and "never ask before merging", and
+    between Alice and Bob, so a note that differs by one is a different note."""
+    wa = _words(a)
+    return bool(wa) and wa == _words(b)
+
+
+def search_memories(query_text: str, limit: int = 10, repeats: bool = False) -> list[dict]:
+    """Retrieval over the ENTIRE memory store, any age: BM25 for the match, then what kind
+    of note it is and how old. Plain BM25 gave a one-line event log entry the same standing
+    as a rule, and filled the answer with five wordings of one fact."""
     q = _fts_query(query_text)
     if not q:
         return []
@@ -186,15 +210,48 @@ def search_memories(query_text: str, limit: int = 10) -> list[dict]:
         _ensure_fts()
         try:
             rows = _db().execute(
-                """SELECT m.id, m.ts, m.author, m.kind, m.text
+                """SELECT m.id, m.ts, m.author, m.kind, m.text, bm25(memories_fts)
                    FROM memories_fts f JOIN memories m ON m.id = f.rowid
                    WHERE memories_fts MATCH ? ORDER BY bm25(memories_fts) LIMIT ?""",
-                (q, limit),
+                (q, max(40, limit * 4)),
             ).fetchall()
         except sqlite3.OperationalError:
             return []
-    return [{"id": r[0], "ts": r[1], "author": r[2], "kind": r[3], "text": r[4]}
-            for r in rows]
+    now = time.time()
+
+    def worth(r):
+        age_days = max(0.0, (now - r[1]) / 86_400)
+        weight = 0.6 if r[3] in EVENT_KINDS else _KIND_WEIGHT.get(r[3], 1.0)
+        # An event log line goes stale in weeks. Something learned keeps most of its worth.
+        fresh = 0.5 ** (age_days / (30 if r[3] in EVENT_KINDS else 365))
+        return -r[5] * weight * (0.5 + 0.5 * fresh)       # bm25 is negative, lower is better
+
+    out: list[dict] = []
+    for r in sorted(rows, key=worth, reverse=True):
+        if not repeats and any(same_note(r[4], kept["text"]) for kept in out):
+            continue
+        out.append({"id": r[0], "ts": r[1], "author": r[2], "kind": r[3], "text": r[4]})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def similar_memory(text: str, kind: str) -> dict | None:
+    """A note of the same kind that already says this, if there is one."""
+    for m in search_memories(text, 12, repeats=True):
+        if m["kind"] == kind and same_note(m["text"], text):
+            return m
+    return None
+
+
+def list_recent_notes(limit: int = 8) -> list[dict]:
+    """The newest things somebody chose to write down, oldest first. Not the event log."""
+    marks = ",".join("?" * len(EVENT_KINDS))
+    with _lock:
+        rows = _db().execute(
+            f"SELECT id, ts, author, kind, text FROM memories WHERE kind NOT IN ({marks}) ORDER BY id DESC LIMIT ?",
+            (*EVENT_KINDS, limit)).fetchall()
+    return [{"id": r[0], "ts": r[1], "author": r[2], "kind": r[3], "text": r[4]} for r in reversed(rows)]
 
 
 def add_memory(author: str, text: str, kind: str = "fact",

@@ -1525,7 +1525,7 @@ async def set_budget(body: BudgetBody):
 @app.get("/api/memory")
 async def memory_list(q: str = "", limit: int = 200):
     if q.strip():
-        rows = await asyncio.to_thread(db.search_memories, q, max(1, min(limit, 200)))
+        rows = await asyncio.to_thread(db.search_memories, q, max(1, min(limit, 200)), True)   # repeats too, so they can be found and removed
     else:
         rows = await asyncio.to_thread(db.list_memories, max(1, min(limit, 500)))
     return {"memories": rows}

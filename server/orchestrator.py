@@ -57,8 +57,10 @@ A2A_HARD_HOP = 10
 # what fills it should be the skills most likely to fire on this turn. At 40 they were
 # 18,000 of the 28,000 characters every Worker carries on every call; skill list has
 # the rest for anyone who needs them.
-SKILL_LINES = 12
+SKILL_LINES = 5          # skills described in full, when the task matches them
+SKILL_NAMES = 10         # the rest, by name only
 SKILL_LINE_CHARS = 200
+SKILL_AVOID_CHARS = 120
 # A channel that failed is tried again by the Watchdog, after a pause long enough that
 # the first attempt is over. A message that has not got through in this long is news
 # nobody needs late, and it is in the app in any case.
@@ -302,7 +304,7 @@ TOOL_DEFS = [
                 "mode": {"type": "string", "enum": ["replace", "revise"],
                          "description": "replace = write the skill as given (default). revise = keep the existing body and append this as a dated correction"},
             },
-            "required": ["name", "description", "content"],
+            "required": ["name", "content"],
         },
     },
     {
@@ -1323,7 +1325,7 @@ class Orchestrator:
             kind = m.get("kind") or "fact"
             return f"[{m['id']}] ({when}, {m['author']}, {kind}) {m['text']}"
 
-        recent = list(reversed(db.list_memories(limit=8)))
+        recent = list(reversed(db.list_recent_notes(6)))
         relevant = []
         if context_text:
             seen = set()
@@ -1411,11 +1413,25 @@ class Orchestrator:
                     lines.append("  open PRs: none")
                 else:
                     lines.append(f"  open PRs ({len(prs)}):")
-                    for p in prs[:15]:
-                        state = "draft" if p.get("isDraft") else p.get("state", "")
+                    # A dependency bot's PRs are a count and their numbers. Eight of eleven
+                    # lines were those, each with a branch name longer than its title, and
+                    # the address is the repository and the number over again.
+                    bots: dict[str, list] = {}
+                    shown = 0
+                    for p in prs:
+                        if re.match(r"(dependabot|renovate)[/-]", p.get("headRefName") or ""):
+                            bots.setdefault(p.get("repo", ""), []).append(p["number"])
+                            continue
+                        if shown >= 15:
+                            continue
+                        shown += 1
+                        state = "draft" if p.get("isDraft") else (p.get("state") or "").lower()
                         lines.append(f"    - {p.get('repo', '')} #{p['number']} {state} "
-                                     f"`{p['headRefName']}` -> `{p['baseRefName']}`: "
-                                     f"{p['title']} ({p['url']})")
+                                     f"`{p['headRefName']}` -> `{p['baseRefName']}`: {p['title']}")
+                    for repo, numbers in bots.items():
+                        lines.append(f"    - {repo}: {len(numbers)} dependency update"
+                                     f"{'s' if len(numbers) != 1 else ''} "
+                                     f"({', '.join(f'#{n}' for n in sorted(numbers))})")
                 self._pr_cache = (time.time(), lines)
             except Exception as exc:
                 lines.append(f"  open PRs: (gh unavailable: {exc.__class__.__name__})")
@@ -1435,10 +1451,8 @@ class Orchestrator:
         # the oldest was "merges and production deploys need the owner's
         # explicit yes". A budget still applies, but anything it cannot fit is
         # counted out loud instead of disappearing.
-        try:
-            out.extend(self._rules_block(db.list_memories_by_kind("rule")))
-        except Exception:
-            pass
+        # They are in each session's opening context instead (`_work_context`), chosen for
+        # its task when they do not all fit, and not said again with every refresh of this.
 
         # Whether an agent may propose changes to Mission Control is a fact about
         # the system, not something to infer from a tool description. Without it
@@ -1462,20 +1476,34 @@ class Orchestrator:
     PR_CACHE_SECONDS = 90
     RULES_CHARS = 4000
 
-    def _rules_block(self, mems: list) -> list[str]:
+    def _rules_block(self, mems: list, query: str = "") -> list[str]:
         rules = [m for m in mems if m.get("kind") == "rule"]
         if not rules:
             return []
+        # The same rule saved twice in the same words is one rule. The newer copy stands,
+        # and the older id is named so either can be found.
+        kept: list[dict] = []
+        for m in reversed(rules):
+            twin = next((k for k in kept if db.same_note(k["text"], m["text"])), None)
+            if twin:
+                twin.setdefault("also", []).append(m["id"])
+            else:
+                kept.append(dict(m))
+        # Into the budget by what this task touches, then newest. By age alone, a thirteenth
+        # rule pushed out whichever was oldest, whatever the work in hand was about.
+        asked = db._words(query)
+        order = sorted(kept, key=lambda m: (-len(asked & db._words(m["text"])), -m["id"]))
         shown, used = [], 0
-        for m in reversed(rules):             # newest first into the budget
-            line = f"    - [{m['id']}] ({m.get('author') or 'unknown'}) {' '.join(m['text'].split())}"
+        for m in order:
+            also = f" (also [{'], ['.join(map(str, sorted(m['also'])))}])" if m.get("also") else ""
+            line = f"    - [{m['id']}]{also} ({m.get('author') or 'unknown'}) {' '.join(m['text'].split())}"
             if used + len(line) > self.RULES_CHARS:
                 continue
-            shown.append(line)
+            shown.append((m["id"], line))
             used += len(line)
-        out = [f"  the owner's standing rules ({len(rules)}):", *reversed(shown)]
-        if len(shown) < len(rules):
-            out.append(f"    ({len(rules) - len(shown)} more standing rules did not fit here; "
+        out = [f"  the owner's standing rules ({len(kept)}):", *(line for _, line in sorted(shown))]
+        if len(shown) < len(kept):
+            out.append(f"    ({len(kept) - len(shown)} more standing rules did not fit here; "
                        "memory_search 'standing rule' before acting on anything they might cover)")
         return out
 
@@ -1500,8 +1528,13 @@ class Orchestrator:
             f"Your model: {self._model_label(aid)}.\n"
             f"Operating system: {platform.system()}. Terminal commands use "
             f"{'cmd.exe (use PowerShell explicitly when needed)' if os.name == 'nt' else 'a POSIX shell'}. "
-            "Choose commands and paths for this machine.\n"
-            "BROWSER EVIDENCE: Current owner corrections override previous conclusions, summaries, "
+            "Choose commands and paths for this machine."
+            + (self.BROWSER_EVIDENCE if agent.get("tools") is None or "browser" in agent["tools"] else "")
+            + (f"\n\n{lessons}" if lessons else "")
+        )
+
+    BROWSER_EVIDENCE = (
+            "\nBROWSER EVIDENCE: Current owner corrections override previous conclusions, summaries, "
             "skills and playbooks. When the owner says you clicked the wrong place, inspect the current "
             "page and distinguish controls by position/menu state before acting again. Do not repeat "
             "the rejected route. If they opened a menu, read it without navigating. A missing control "
@@ -1509,9 +1542,7 @@ class Orchestrator:
             "as needed. A screenshot filename or a terminal success is not image evidence. Only describe "
             "an image actually provided to you. Use the browser screenshot action for websites. "
             "Never claim a profile switch needs another login without inspecting the actual profile menu. "
-            "Save verified successful steps in playbooks; do not convert a failed attempt into a site limitation."
-            + (f"\n\n{lessons}" if lessons else "")
-        )
+            "Save verified successful steps in playbooks; do not convert a failed attempt into a site limitation.")
 
     def _work_context(self, aid: str, query: str = "") -> str:
         """What a new session is told up front, chosen for this task: the state of
@@ -1528,18 +1559,33 @@ class Orchestrator:
         skill_index = [s for s in skills.list_skills() if s.get("valid", True)
                        and ("agents" not in s.get("contract", {}) or aid in s["contract"]["agents"])
                        and (permitted_skills is None or s["slug"] in permitted_skills)]
-        skill_index = skills.rank(skill_index, query, SKILL_LINES)
+        # Described in full only where the task touches them. The rest are names: twelve
+        # descriptions were a quarter of every session's opening context, most of them
+        # about some other kind of work, and `skill list` has them all.
+        described = skills.rank(skill_index, query, SKILL_LINES, matching=True) if query else []
+        shown = {sk["slug"] for sk in described}
+        named = [sk for sk in skills.rank(skill_index, "", SKILL_NAMES + len(shown)) if sk["slug"] not in shown]
         skill_block = ""
         if skill_index:
             def _line(sk):
-                line = f"{sk['slug']} ({sk['name']}): {recall.inline(sk['description'], SKILL_LINE_CHARS)}"
+                name = "" if sk["name"].casefold().replace(" ", "-") == sk["slug"] else f" ({sk['name']})"
+                line = f"{sk['slug']}{name}: {recall.inline(sk['description'], SKILL_LINE_CHARS)}"
                 if sk.get("avoid"):
-                    line += f" [NOT FOR: {recall.inline(sk['avoid'], SKILL_LINE_CHARS)}]"
+                    avoid = re.sub(r"^(NOT FOR:?\s*)+", "", sk["avoid"].strip(), flags=re.I)
+                    line += f" [NOT FOR: {recall.inline(avoid, SKILL_AVOID_CHARS)}]"
                 return line
-            skill_block = ("\nTEAM SKILLS likeliest to matter here; skill list has the rest (inspect with skill "
-                           "read, then skill activate before redoing a learned procedure; NOT FOR marks what a "
-                           "skill is the wrong tool for): " + "; ".join(
-                               _line(sk) for sk in skill_index) + "\n")
+            parts = []
+            if described:
+                parts.append("TEAM SKILLS that match this task (skill read to inspect, then skill activate before "
+                             "redoing a learned procedure; NOT FOR marks what one is the wrong tool for):\n  - "
+                             + "\n  - ".join(_line(sk) for sk in described))
+            if named:
+                parts.append(("Other team skills" if described else "TEAM SKILLS (skill read to inspect one, "
+                              "skill list for all)") + ": "
+                             + ", ".join(sk["slug"] for sk in named[:SKILL_NAMES])
+                             + (f", and {len(skill_index) - len(shown) - SKILL_NAMES} more in skill list"
+                                if len(skill_index) - len(shown) > SKILL_NAMES else ""))
+            skill_block = "\n" + "\n".join(parts) + "\n"
         mcp_block = ""
         permitted_tools = self.agents[aid].get("tools")
         if permitted_tools is None or "mcp" in permitted_tools:
@@ -1548,8 +1594,12 @@ class Orchestrator:
         module_block = ""
         if permitted_tools is None or "module" in permitted_tools:
             module_block = modules_mod.index_block()
+        try:
+            rules = "\n".join(self._rules_block(db.list_memories_by_kind("rule"), query))
+        except Exception:
+            rules = ""
         return (
-            f"{self._current_state_text}\n\n{self._team_memory_block(query)}"
+            f"{self._current_state_text}\n{rules}\n\n{self._team_memory_block(query)}"
             f"\n{book_block}{skill_block}{mcp_block}{module_block}"
             "\nIMPORTANT: CURRENT STATE above is the live answer to 'what's now'. "
             "TEAM MEMORY is durable history but can become stale. Treat memory as context, "
@@ -1609,7 +1659,29 @@ class Orchestrator:
         except Exception:
             return True
 
-    async def _maybe_learn(self, aid: str, trail: list[str], used: list[str]):
+    REPEATS_WINDOW = 21 * 86_400
+
+    def _done_before(self, aid: str, title: str) -> list[str]:
+        """Titles of this profile's recent tasks of the same kind. The third review in a week
+        is the clearest sign there is that a procedure is worth writing down, and nothing
+        looked: 27 reviews in a week made 1,900 tool calls and no skill."""
+        wanted = skills._terms(title)
+        if len(wanted) < 2:
+            return []
+        since = time.time() - self.REPEATS_WINDOW
+        out = []
+        for row in store.sessions(None, "worker", 200, aid):
+            meta = row.get("meta") or {}
+            # A scheduled job has the same title every time it runs. That is a timetable,
+            # not somebody working the same thing out again.
+            if meta.get("one_shot") or meta.get("source") in ("cron", "heartbeat", "watch"):
+                continue
+            have = skills._terms(row.get("title") or "")
+            if row["created"] >= since and have and len(wanted & have) / len(wanted | have) >= 0.4:
+                out.append(row["title"])
+        return out[1:] if title in out[:1] else out      # not counting this one
+
+    async def _maybe_learn(self, aid: str, trail: list[str], used: list[str], title: str = ""):
         """After a turn that was real work, ask the agent's own model whether the
         team just learned something: a procedure worth writing down, or a
         correction to a skill that turned out to be wrong.
@@ -1626,9 +1698,15 @@ class Orchestrator:
         async with lock:
             try:
                 index = await asyncio.to_thread(skills.list_skills)
-                proceed, decision = await self._learn_gate(aid, trail, used, index)
+                earlier = await asyncio.to_thread(self._done_before, aid, title) if title else []
+                proceed, decision = await self._learn_gate(aid, trail, used, index, earlier)
                 if not proceed:
                     return
+                again = ("" if len(earlier) < 2 else
+                         f"THIS KIND OF TASK KEEPS COMING BACK: this is at least the {len(earlier) + 1}th time in three "
+                         "weeks (earlier: " + "; ".join(recall.inline(t, 70) for t in earlier[:4]) + "). If no existing "
+                         "skill covers its general shape, that shape is worth one: what to check first, the commands "
+                         "that worked, what to leave alone.\n\n")
                 catalog = "\n".join(
                     f"- {sk['name']}: {sk['description']}"
                     + (f" [NOT FOR: {sk['avoid']}]" if sk.get("avoid") else "")
@@ -1654,8 +1732,12 @@ class Orchestrator:
                     "because its description is read by everyone forever.\n"
                     "'description' is the trigger: name the exact situation. 'avoid' is "
                     "the guard: name the neighbouring task this must NOT be used for, "
-                    "and what to use there instead.",
-                    f"EXISTING SKILLS:\n{catalog}\n\n"
+                    "and what to use there instead.\n"
+                    "Write for the kind of task, never for this one instance: no PR, issue, "
+                    "ticket, build or version numbers in the name or the description. Lines "
+                    "marked FAILED in the trail are what went wrong on the way; the skill is "
+                    "the route that worked, with the failure as its gotcha.",
+                    f"{again}EXISTING SKILLS:\n{catalog}\n\n"
                     f"SKILLS THIS AGENT READ THIS TURN: {read_note}\n\n"
                     f"TOOL TRAIL ({len(trail)} calls):\n" + "\n".join(trail[-70:]),
                     max_tokens=1200, agent=aid, conf=self.agent_llm(aid))
@@ -1664,7 +1746,7 @@ class Orchestrator:
                 logger.exception("skill reflection failed for %s", aid)
 
     async def _learn_gate(self, aid: str, trail: list[str],
-                          used: list[str], index: list) -> tuple[bool, str]:
+                          used: list[str], index: list, earlier: list | None = None) -> tuple[bool, str]:
         """Decide whether this turn is worth a reflection call.
 
         With a decision model configured this reads the trail itself and answers
@@ -1674,6 +1756,7 @@ class Orchestrator:
         """
         import time as _time
         state = {"tool_trail": trail[-70:],
+                 "earlier_tasks_of_this_kind": (earlier or [])[:6] or ["none"],
                  "skills_read_this_turn": sorted(set(used)) or ["none"],
                  "existing_skills": [{"name": sk["name"],
                                       "description": sk["description"],
@@ -1687,7 +1770,8 @@ class Orchestrator:
                                 "cost the retries?",
                 "criteria": {
                     "true": "A later agent facing this task would finish faster for "
-                            "having read it.",
+                            "having read it. Several earlier_tasks_of_this_kind with no "
+                            "skill covering them makes this likely.",
                     "false": "One-off work, pure conversation, or something the "
                              "existing skills already cover."}},
             "correction": {
@@ -1752,6 +1836,16 @@ class Orchestrator:
             return "unknown-skill"
         if action not in ("new", "revise"):
             return "none"
+        if action == "new":
+            permitted = self.agents.get(aid, {}).get("skills")
+            index = [sk for sk in await asyncio.to_thread(skills.list_skills) if sk.get("valid", True)
+                     and ("agents" not in sk.get("contract", {}) or aid in sk["contract"]["agents"])
+                     and (permitted is None or sk["slug"] in permitted)]
+            same = skills.twin(index, name, desc)
+            if same and await asyncio.to_thread(skills.slug_for, same["name"]) == same["slug"]:
+                logger.info("skill reflection for %s: '%s' is '%s' again, so it revises that", aid, name, same["slug"])
+                # Its trigger and its guard stay as they were: only the procedure is added to.
+                name, action, desc, avoid = same["name"], "revise", "", ""
         try:
             slug = await asyncio.to_thread(
                 skills.save_skill, aid, name, desc, content, avoid,
@@ -1803,8 +1897,15 @@ class Orchestrator:
         return self._detached.setdefault(aid, _Detached(aid))
 
     async def _exec_tool(self, aid, agent_cwd, name, args, call_id=None) -> str:
-        return await self.harness.execute(aid, name, args,
+        ctx = self._ctx(aid)
+        before = len(ctx.trail)
+        out = await self.harness.execute(aid, name, args,
             lambda: self._dispatch_tool(aid, agent_cwd, name, args), call_id)
+        # What went wrong is half of what there is to learn from a trail. Without it the
+        # reflection saw six attempts and could not tell which one was the answer.
+        if getattr(out, "status", "completed") != "completed" and len(ctx.trail) > before:
+            ctx.trail[before] += "  -> FAILED: " + " ".join(str(out).split())[:90]
+        return out
 
     async def _dispatch_tool(self, aid, agent_cwd, name, args) -> str:
         ctx = self._ctx(aid)
@@ -1844,6 +1945,16 @@ class Orchestrator:
             if kind == "rule" and not getattr(ctx, "owner_here", True):
                 return ("refused: a standing rule has to come from the owner's own message, and what you are "
                         "handling did not. Save it as a fact, or ask them.")
+            # One fact, one note. Two agents who each heard the owner say something both
+            # saved it, and every session since has read it twice. The newer wording stands.
+            # Only its own note, or with the owner here: a session reading a stranger's text
+            # must not be able to reword what the owner or anyone else put down.
+            twin = await asyncio.to_thread(db.similar_memory, text, kind)
+            if twin and twin["text"].strip() != text and (twin["author"] == aid or getattr(ctx, "owner_here", False)):
+                await asyncio.to_thread(db.update_memory, twin["id"], text)
+                await self._emit({"type": "memory_updated"})
+                await self._activity(aid, f"remembered (updating [{twin['id']}]): {text[:140]}", "memory")
+                return f"saved as [{twin['id']}], which already said this and now has your wording"
             mid = await asyncio.to_thread(db.add_memory, aid, text, kind)
             await self._emit({"type": "memory_updated"})
             await self._activity(aid, f"remembered: {text[:140]}", "memory")
@@ -1949,8 +2060,10 @@ class Orchestrator:
             mode = (args.get("mode") or "replace").strip()
             if mode not in ("replace", "revise"):
                 return "mode must be replace or revise"
-            if not (sname and content) or (mode == "replace" and not desc):
-                return "name, description, and content are all required"
+            if not (sname and content):
+                return "name and content are required"
+            if mode == "replace" and not desc:
+                return "writing a skill out in full needs its description too: one line saying when to use it"
             try:
                 slug = await asyncio.to_thread(skills.save_skill, aid, sname, desc,
                                                content, avoid, mode)

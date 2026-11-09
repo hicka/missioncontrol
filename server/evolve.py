@@ -543,17 +543,32 @@ def add_lesson(agent: str, text: str, source: str, evidence: dict | None = None,
         raise ValueError("unknown lesson status")
     live = [l for l in lessons(None, LIVE) if l["agent"] == agent]
     # A suspended or proposed lesson is still the team's answer to its problem;
-    # writing another beside it would undo the hold.
-    for existing in live + [l for l in lessons(None, HELD) if l["agent"] == agent]:
-        if _similar(existing["text"], text) or (signature and existing.get("signature") == signature):
+    # writing another beside it would undo the hold. The team's lessons count too: an
+    # agent reads those beside its own, and the same rule was being kept in both.
+    covers = (agent, "*")
+    for existing in [l for l in lessons(None, LIVE) + lessons(None, HELD) if l["agent"] in covers]:
+        same_scope = existing["agent"] == agent
+        if _similar(existing["text"], text) or (same_scope and signature and existing.get("signature") == signature):
             raise ValueError(f"already covered by lesson L{existing['id']}")
-    if len(live) >= MAX_LESSONS:
-        room = sorted((l for l in live if l["status"] == "trial" and not l["pinned"]
-                       and l["source"] not in ("owner", "owner-rule")), key=lambda l: l["ts"])
+    # The limit is on what was learned, not on what the owner said: their rules are theirs
+    # to count. With nine of those in the team's ten places, every lesson learned from a
+    # failure pushed out the one before it, untested, and the same failure was learned
+    # again the next night. Five times, for one of them.
+    learned = [l for l in live if l["source"] not in ("owner", "owner-rule")]
+    # What a model took for a rule of theirs has a limit of its own. What they set
+    # themselves has none.
+    if source == "owner-rule" and len([l for l in live if l["source"] == "owner-rule"]) >= 2 * MAX_LESSONS:
+        raise ValueError(f"this scope already holds {2 * MAX_LESSONS} rules taken from what the owner said; "
+                         "retire one first")
+    if len(learned) >= MAX_LESSONS and not owner:
+        tried = time.time() - TRIAL_DAYS * 86400
+        room = sorted((l for l in learned if l["status"] == "trial" and not l["pinned"] and l["ts"] < tried),
+                      key=lambda l: l["ts"])
         if not room:
-            raise ValueError(f"this scope already holds {MAX_LESSONS} lessons; retire one first")
+            raise ValueError(f"this scope already holds {MAX_LESSONS} learned lessons, and none has been on "
+                             "trial long enough to give up its place; retire one first")
         update_lesson(room[0]["id"], status="retired",
-                      note="retired untested to make room for a newer lesson")
+                      note="retired without a verdict to make room for a newer lesson")
     now = time.time()
     with db._lock:
         c = _ensure()
@@ -607,14 +622,24 @@ def for_prompt(agent: str) -> list[dict]:
     rank = {"owner": 0, "owner-rule": 0}
     rows.sort(key=lambda l: (not l["pinned"], rank.get(l["source"], 1),
                              l["status"] != "active", -l["ts"]))
-    out, used = [], 0
-    for lesson in rows:
-        cost = len(lesson["text"]) + 16
-        if used + cost > PROMPT_CHARS:
-            continue
-        out.append(lesson)
-        used += cost
-    return out
+    # Half the room is the agent's own first. In order alone, the team's owner rules took
+    # all of it, and what an agent had been corrected on itself ("never merge a held PR")
+    # was never in front of it.
+    chosen, used = set(), 0
+    for own_first, room in ((True, PROMPT_CHARS // 2), (False, PROMPT_CHARS)):
+        for lesson in rows:
+            cost = len(lesson["text"]) + 16
+            if lesson["id"] in chosen or (own_first and lesson["agent"] != agent) or used + cost > room:
+                continue
+            chosen.add(lesson["id"])
+            used += cost
+    return [lesson for lesson in rows if lesson["id"] in chosen]
+
+
+def shown(lesson: dict) -> bool:
+    """Whether anyone reads this lesson. One that did not fit in the prompt cannot have
+    been what prevented anything."""
+    return any(l["id"] == lesson["id"] for l in for_prompt(lesson["agent"]))
 
 
 def lessons_block(agent: str) -> str:
@@ -1190,6 +1215,10 @@ def evaluate_trials(now: float | None = None) -> dict:
             if owners and hits and hits > int(lesson["recurrences"] or 0):
                 out["attention"].append({"lesson": lesson["id"], "text": lesson["text"],
                                          "why": f"broken {hits} time(s) since it was set"})
+            continue
+        if not shown(lesson):
+            # Nothing to judge yet, either way: it has been waiting for room, not being
+            # followed, so it neither failed to help nor prevented anything.
             continue
         age = now - lesson["ts"]
         limit = 2 if lesson["signature"] else 1

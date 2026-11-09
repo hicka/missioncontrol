@@ -305,9 +305,15 @@ all is quiet, so pulses cost little and say nothing unless it matters.
 
 def heartbeat_settings() -> dict:
     h = cfg.load().get("heartbeat") or {}
+    try:
+        asked = h.get("quiet_stretch")
+        quiet = QUIET_STRETCH if asked is None else max(1, min(24, int(asked)))      # 0 or 1 switches it off
+    except (TypeError, ValueError):
+        quiet = QUIET_STRETCH
     return {"enabled": bool(h.get("enabled")),
             "agent": h.get("agent") or "",
-            "every_minutes": max(5, int(h.get("every_minutes") or 30))}
+            "every_minutes": max(5, int(h.get("every_minutes") or 30)),
+            "quiet_stretch": quiet}
 
 
 def heartbeat_file():
@@ -341,6 +347,31 @@ def pulse_due(last_fire: float, every_minutes: int, now: float | None = None) ->
     return (now or time.time()) - last_fire >= every_minutes * 60
 
 
+# A pulse is a whole session: its prompt, its tools and the state of everything, read from
+# cold. In one week 119 of 121 found nothing, most of them overnight with nothing having
+# happened since the one before. So with no work under way and nothing new since the last
+# pulse, pulses come this many times further apart. Anything happening brings them back.
+QUIET_STRETCH = 4
+
+
+def pulse_now(last_fire: float, settings: dict, busy, now: float | None = None) -> bool:
+    """busy: whether anything has happened since that time, asked only when it matters."""
+    if not pulse_due(last_fire, settings["every_minutes"], now):
+        return False
+    if settings.get("quiet_stretch", 1) <= 1 or not last_fire:
+        return True
+    return pulse_due(last_fire, settings["every_minutes"] * settings["quiet_stretch"], now) or bool(busy(last_fire))
+
+
+def _anything_since(since: float) -> bool:
+    import kernel_store
+    try:
+        return kernel_store.anything_since(since)
+    except Exception:
+        logger.exception("could not tell whether anything happened; pulsing anyway")
+        return True
+
+
 async def heartbeat_loop(orch):
     """OpenClaw-style pulse: the lead agent proactively reviews a checklist.
     The last pulse time is kept on disk so a server restart does not
@@ -350,7 +381,7 @@ async def heartbeat_loop(orch):
     while True:
         try:
             h = heartbeat_settings()
-            if h["enabled"] and not orch.paused and pulse_due(last_fire, h["every_minutes"]):
+            if h["enabled"] and not orch.paused and pulse_now(last_fire, h, _anything_since):
                 aid = h["agent"] if h["agent"] in orch.agents else next(iter(orch.agents))
                 checklist = heartbeat_file().read_text()[:4000]
                 last_fire = time.time()

@@ -54,7 +54,9 @@ def _serialized(fn):
 
 def _slug(name: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    return s[:60] or "skill"
+    # Cut, then trimmed again: a cut that lands on a hyphen left a name that slugged
+    # differently the second time round, and one skill became two folders.
+    return s[:60].strip("-") or "skill"
 
 
 def _parse(md: str) -> dict:
@@ -216,7 +218,27 @@ def _terms(text: str) -> set:
             if len(w) > 2 and w not in _STOP}
 
 
-def rank(index: list[dict], query: str, limit: int) -> list[dict]:
+def twin(index: list[dict], name: str, description: str, threshold: float = 0.85) -> dict | None:
+    """A skill that already answers to this trigger, under another name. Learning the same
+    procedure a second time made a second skill beside the first, and each was then read
+    half as often and corrected half as often. Nearly word for word, and no less: "deploy
+    to production" is not "deploy to staging", whatever else the two lines share."""
+    wanted = _terms(f"{name} {description}")
+    slug = _slug(name)
+    best, best_overlap = None, 0.0
+    for sk in index:
+        if sk.get("slug") == slug:
+            continue
+        have = _terms(f"{sk.get('name', '')} {sk.get('description', '')}")
+        if not wanted or not have:
+            continue
+        overlap = len(wanted & have) / len(wanted | have)
+        if overlap > best_overlap:
+            best, best_overlap = sk, overlap
+    return best if best_overlap >= threshold else None
+
+
+def rank(index: list[dict], query: str, limit: int, matching: bool = False) -> list[dict]:
     """The skills most worth showing this turn, most relevant first.
 
     Scored on the trigger (name and description), because that is what says when
@@ -225,6 +247,9 @@ def rank(index: list[dict], query: str, limit: int) -> list[dict]:
     common ones, so a catalogue where every entry says "deploy" is not decided by
     that word. Ties, and an empty query, fall back to what has actually been used
     and how recently — which beats the directory listing either way.
+
+    matching: only skills whose trigger shares a word with the query. Padding the list
+    out to its limit put an iOS simulator skill in front of someone fixing a web form.
     """
     if limit <= 0 or not index:
         return []
@@ -244,7 +269,15 @@ def rank(index: list[dict], query: str, limit: int) -> list[dict]:
         recency = 0.05 * ((sk.get("last_used") or 0) / newest)
         return (hit, familiarity + recency, sk.get("slug") or "")
 
-    return sorted(index, key=score, reverse=True)[:limit]
+    ordered = sorted(index, key=score, reverse=True)
+    if matching:
+        # Two words in common, or one that only this skill and one other use. A single
+        # everyday word ("new", "issue") is not the task touching the skill.
+        def touches(sk):
+            shared = wanted & _terms(f"{sk.get('name', '')} {sk.get('description', '')}")
+            return len(shared) >= 2 or any(document_count.get(term, 0) <= 2 for term in shared)
+        ordered = [sk for sk in ordered if touches(sk)]
+    return ordered[:limit]
 
 
 def _load_uses() -> dict:
@@ -270,6 +303,13 @@ def record_use(slug: str):
 
 def slug_for(name: str) -> str | None:
     """The slug a name resolves to, or None if no such skill."""
+    # A folder as it is named on disk first: one made before names were trimmed after
+    # cutting can end in a hyphen, and must still be readable and removable.
+    # Compared with the names as listed: on a filesystem that ignores case, asking whether
+    # "Counted" exists says yes for a folder called "counted".
+    if re.fullmatch(r"[a-zA-Z0-9_-]+", name or "") and SKILLS_DIR.is_dir() and any(
+            d.name == name for d in SKILLS_DIR.iterdir()) and _file(name).exists():
+        return name
     slug = _slug(name)
     if _file(slug).exists():
         return slug
@@ -355,7 +395,7 @@ def write_skill(slug: str, content: str) -> bool:
 
 @_serialized
 def delete_skill(name: str) -> bool:
-    slug = _slug(name)
+    slug = slug_for(name) or _slug(name)
     f = _file(slug)
     d = f.parent
     if not f.exists():

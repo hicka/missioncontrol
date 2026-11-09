@@ -225,6 +225,7 @@ class Worker(sess.Session):
         self.nudged_wait = False
         self.nudged_report = False
         self.nudged_progress = False
+        self.rules_told = None
         self.heard_owner = False
         self.stretches = 0
         self.trail_unasked = False
@@ -240,9 +241,19 @@ class Worker(sess.Session):
     def cwd(self) -> str:
         return self.orch.workers.workspaces.cwd(self.row, super().cwd)
 
+    def _rules(self) -> str:
+        try:
+            return "\n".join(self.orch._rules_block(db.list_memories_by_kind("rule"), self.row.get("title") or ""))
+        except Exception:
+            return ""
+
     def pinned(self) -> str:
         task = ((store.session_get(self.id) or self.row).get("meta") or {}).get("task") or ""
-        return f"WHAT THIS TASK IS, AS IT WAS GIVEN:\n{task}" if task else ""
+        # The owner's rules with it. They are in the opening context, which compaction
+        # takes away, and a Worker that has run long is the one most in need of them.
+        rules = self._rules()
+        return "\n\n".join(part for part in (
+            f"WHAT THIS TASK IS, AS IT WAS GIVEN:\n{task}" if task else "", rules.strip()) if part)
 
     @property
     def activity_thread(self) -> str:
@@ -311,7 +322,8 @@ class Worker(sess.Session):
             # event, and what is learned from it goes in front of the whole team.
             if not self.trail_unasked and not self.carrying_on:
                 self.orch._spawn_background(
-                    self.orch._maybe_learn(self.profile, list(self.trail), list(self.skills_used)),
+                    self.orch._maybe_learn(self.profile, list(self.trail), list(self.skills_used),
+                                           self.row.get("title") or ""),
                     "skill_learning", self.profile)
 
     async def _state_on_waking(self):
@@ -321,7 +333,14 @@ class Worker(sess.Session):
             return
         self.state_told = time.time()
         await self.orch.refresh_current_state()
-        await asyncio.to_thread(store.inbox_put, self.id, "system", self.orch._current_state_text, wakes=False)
+        text = self.orch._current_state_text
+        # The rules are said again only when they have changed since this Worker last had
+        # them: one added while it waited is one it has never read.
+        rules = await asyncio.to_thread(self._rules)
+        if self.rules_told is not None and rules != self.rules_told:
+            text += "\n\nThe owner's standing rules have changed. As they stand now:\n" + rules
+        self.rules_told = rules
+        await asyncio.to_thread(store.inbox_put, self.id, "system", text, wakes=False)
 
     async def _observe_browser(self):
         """Owner actions in the shared browser can happen between runs. Observe the
