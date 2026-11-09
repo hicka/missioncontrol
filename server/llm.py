@@ -214,11 +214,16 @@ async def _post(url: str, payload: dict, headers: dict) -> dict:
     read = min(600.0, max(180.0, int(payload.get("max_tokens") or 0) / 40))
     async with httpx.AsyncClient(timeout=httpx.Timeout(read, connect=15.0),
                                  transport=_transport) as client:
+        waited_out = 0
         for attempt in range(4):
             try:
                 r = await client.post(url, json=payload, headers=headers)
                 if r.status_code == 200:
-                    return r.json()
+                    try:
+                        return r.json()
+                    except ValueError:
+                        # A gateway's error page with a 200 on it. Not an answer, and not a refusal.
+                        raise RuntimeError(f"LLM connection failed: unreadable reply: {r.text[:200]}") from None
                 if _exhausted(r.status_code, r.text):
                     raise RuntimeError(f"LLM HTTP {r.status_code} (plan exhausted): {r.text[:400]}")
                 if r.status_code in _RETRY_STATUS and attempt < 3:
@@ -227,12 +232,29 @@ async def _post(url: str, payload: dict, headers: dict) -> dict:
                     continue
                 raise RuntimeError(f"LLM HTTP {r.status_code}: {r.text[:400]}")
             except (httpx.TransportError, httpx.TimeoutException) as exc:
-                if attempt < 3:
+                # Waiting out a whole reply that never comes can take ten minutes, so that is
+                # tried twice and no more. Four times had the one Router deaf for half an hour
+                # on a connection that died while the Mac slept.
+                waited_out += isinstance(exc, httpx.ReadTimeout)
+                if attempt < 3 and waited_out < 2:
                     await asyncio.sleep(delay)
                     delay *= 2
                     continue
-                raise RuntimeError(f"LLM connection failed: {exc}") from exc
+                raise RuntimeError(f"LLM connection failed: {exc or type(exc).__name__}") from exc
     raise RuntimeError("LLM: retries exhausted")
+
+
+# A provider can accept a request and then say, inside the stream, that it is too busy to
+# answer it. That is being down, not refusing: it is retried and a fallback may take it.
+_BUSY = ("overloaded", "rate_limit", "api_error", "timeout", "server_error", "unavailable", "internal")
+
+
+def _stream_error(kind: str, message: str) -> RuntimeError:
+    said = f"{kind} {message}".strip()[:300]
+    # By its kind when it gives one: the words of a real refusal can mention a timeout too.
+    if any(word in (kind or message).lower() for word in _BUSY) and "invalid" not in kind.lower():
+        return RuntimeError(f"LLM connection failed: stream error: {said}")
+    return RuntimeError(f"LLM stream error: {said}")
 
 
 async def _post_stream(url: str, payload: dict, headers: dict, wire: str, on_text) -> dict:
@@ -312,9 +334,12 @@ async def _assemble_anthropic(events, on_text) -> dict:
     partial: dict[int, str] = {}
     out: dict = {"content": blocks}
     usage: dict = {}
+    ended = False
     async for ev in events:
         kind = ev.get("type")
-        if kind == "message_start":
+        if kind == "message_stop":
+            ended = True
+        elif kind == "message_start":
             usage.update((ev.get("message") or {}).get("usage") or {})
             out["model"] = (ev.get("message") or {}).get("model")
         elif kind == "content_block_start":
@@ -355,7 +380,12 @@ async def _assemble_anthropic(events, on_text) -> dict:
             _merge_usage(usage, ev.get("usage") or {})
         elif kind == "error":
             err = ev.get("error") or {}
-            raise RuntimeError(f"LLM stream error: {err.get('type', '')} {err.get('message', '')}"[:400])
+            raise _stream_error(str(err.get("type") or ""), str(err.get("message") or ""))
+    # A stream that just stops, with no ending and no reason, was cut off on the way. Taken
+    # as whole, half a sentence became the answer and a tool call whose arguments never
+    # arrived ran with none.
+    if (partial and out.get("stop_reason") != "max_tokens") or not (ended or out.get("stop_reason")):
+        raise RuntimeError("LLM connection failed: the reply stopped arriving before it was finished")
     out["usage"] = usage
     return out
 
@@ -369,7 +399,9 @@ async def _assemble_openai(events, on_text) -> dict:
     async for ev in events:
         if ev.get("error"):
             err = ev["error"]
-            raise RuntimeError(f"LLM stream error: {err.get('message', err) if isinstance(err, dict) else err}"[:400])
+            if isinstance(err, dict):
+                raise _stream_error(str(err.get("type") or err.get("code") or ""), str(err.get("message") or err))
+            raise _stream_error("", str(err))
         model = ev.get("model") or model
         if ev.get("usage"):
             usage = ev["usage"]
@@ -703,13 +735,24 @@ def text_of(response: dict) -> str:
     ).strip()
 
 
+INVALID_TOOL = "invalid_tool"
+UNPARSED = "_unparsed"
+
+
 def tool_uses(response: dict) -> list:
     uses = []
     for b in response.get("content", []) or []:
         if not isinstance(b, dict) or b.get("type") != "tool_use":
             continue
-        if not isinstance(b.get("name"), str):
-            b["name"] = ""
+        # These blocks go into the transcript and back to the provider on every later call.
+        # One with arguments that are not an object, or a name no tool could have, is
+        # answered with a 400 each time, so a single garbled call ended its task for good.
+        # The harness still refuses it; it is only kept in a shape that can be sent again.
+        if not isinstance(b.get("name"), str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", b["name"]):
+            b["name"] = INVALID_TOOL
+        if not isinstance(b.get("input"), dict):
+            raw = b.get("input")
+            b["input"] = {UNPARSED: (raw if isinstance(raw, str) else json.dumps(raw, default=str))[:2000]}
         if not isinstance(b.get("id"), str) or not b["id"]:
             b["id"] = f"call_{uuid.uuid4().hex[:12]}"
         uses.append(b)

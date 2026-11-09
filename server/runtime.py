@@ -252,8 +252,15 @@ def owner_alive():
 
 
 async def supervise():
+    # Nothing watches the supervisor. One bad pass (settings.yaml caught mid-edit and not
+    # parsing) used to end it for good, and with it every restart of everything else.
     while True:
-        await registry.reconcile()
+        try:
+            await registry.reconcile()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("service supervisor pass failed")
         await asyncio.sleep(2)
 
 

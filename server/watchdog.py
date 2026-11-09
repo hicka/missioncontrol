@@ -54,6 +54,12 @@ FOLLOWING_IS_WAITING_FOR = 2 * 3600
 # Each check on one comes that far apart, and strikes that fade sooner never add up to telling
 # anyone: it would be nudged every two hours for ever.
 STRANDED_STRIKES_EXPIRE = 3 * FOLLOWING_IS_WAITING_FOR
+# A held command is something to wait for while the owner might still answer it. They never
+# expire, so one forgotten in the Inbox used to count as "waiting" for good, and the task
+# behind it sat on its authority and its checkout with nobody told.
+APPROVAL_IS_WAITING_FOR = 24 * 3600
+# Sweeps this far apart mean the machine slept. Time spent asleep is not time spent hung.
+SLEPT_IF_GAP = 5 * TICK
 OUTBOX_GIVE_UP_AFTER = 6 * 3600
 # How long something a task started may outlive its last run.
 LEFT_BEHIND_LIMIT = 6 * 3600
@@ -64,17 +70,38 @@ class Facts(dict):
     __getattr__ = dict.get
 
 
-def gather(row: dict, watches: list, approvals: list, alive: bool) -> Facts:
+def gather(row: dict, watches: list, approvals: list, alive: bool, woke: float = 0.0) -> Facts:
     sid = row["id"]
+    now = time.time()
     return Facts(
         row=row, alive=alive,
         jobs=store.jobs_of(sid, "running"),
         inbox=store.inbox_should_wake(sid),
         watches=[w for w in watches if w.get("session") == sid],
-        approvals=[a for a in approvals if a.get("session") == sid],
+        approvals=[a for a in approvals if a.get("session") == sid
+                   and now - (a.get("ts") or now) < APPROVAL_IS_WAITING_FOR],
+        forgotten=[a for a in approvals if a.get("session") == sid
+                   and now - (a.get("ts") or now) >= APPROVAL_IS_WAITING_FOR],
         following=store.threads_that_wake(sid),
-        last=max(store.log_last_activity(sid), row["progress"]),
+        # Nothing can have happened while the machine was asleep, so the clock on a
+        # session starts no earlier than when it woke.
+        last=max(store.log_last_activity(sid), row["progress"], woke),
     )
+
+
+def describe(facts: Facts, now: float) -> str:
+    """The state a verdict was read from, for the log and for whoever is told. A verdict
+    with no reason is all "hung:  -> restarted" ever said."""
+    parts = [f"status {facts.row['status']}", "running" if facts.alive else "not running",
+             f"no step for {int(max(0, now - (facts.last or now)) // 60)} min"]
+    if facts.inbox and facts.inbox.get("count"):
+        parts.append(f"{facts.inbox['count']} unread")
+    for name in ("jobs", "watches", "approvals"):
+        if facts.get(name):
+            parts.append(f"{len(facts[name])} {name}")
+    if facts.forgotten:
+        parts.append(f"{len(facts.forgotten)} held command(s) unanswered for over a day")
+    return ", ".join(parts)
 
 
 def diagnose(facts: Facts, now: float) -> str | None:
@@ -135,6 +162,9 @@ class Watchdog:
         self.strike_times: dict[tuple, float] = {}
         self.retried: dict[str, float] = {}
         self.session = None
+        self.last_sweep = 0.0
+        self.pruned = 0.0
+        self.woke = 0.0
         self.answering: asyncio.Task | None = None
         self.asked_from = (None, None, None)
 
@@ -177,6 +207,10 @@ class Watchdog:
         self.strike_times[key] = now
         self.strikes[key] = self.strikes.get(key, 0) + 1
         if self.strikes[key] > ESCALATE_AFTER:
+            # Having told someone is no reason to stop reading its mail. Past this point a
+            # session with unread messages was never woken again while the trouble lasted.
+            if verdict == "not_running":
+                self.orch.workers.wake(sid, priority=True)
             if self.strikes[key] == ESCALATE_AFTER + 1:
                 await self._record(sid, verdict, reason, "escalated")
                 # Told and still stuck on nothing, so all that is left is for a person to say. Left
@@ -198,7 +232,10 @@ class Watchdog:
                                     "state before repeating anything with an outward effect, then carry on.")
         elif verdict == "stranded":
             await self._record(sid, verdict, reason, "nudged")
-            await self.nudge(sid, "You have no job running, no watch of your own, no request held for the owner and "
+            held = ("A command of yours has been held for the owner for over a day without an answer, so do not "
+                    "count on it. " if "unanswered for over a day" in reason else "")
+            await self.nudge(sid, held + "You have no job running, no watch of your own, no request the owner is "
+                                  "likely to answer and "
                                   "nothing queued, so nothing is going to wake you. If this task is finished, "
                                   "report ready. If not, carry on and finish it now. Do not end your turn waiting "
                                   "to be woken unless you have armed something that will.")
@@ -219,6 +256,10 @@ class Watchdog:
         pending = await asyncio.to_thread(store.inbox_should_wake, router.id)
         dead = not router.task or router.task.done()
         stuck = pending["count"] and pending["oldest"] and now - pending["oldest"] > ROUTER_BACKLOG
+        # With the day's budget spent it is not reading on purpose. Restarting it for that
+        # would happen every minute until midnight and change nothing.
+        if stuck and not dead and budget.check(thread="watchdog")[0] == "stop":
+            return
         if dead or stuck:
             await self._record(router.id, "router_down" if dead else "router_stuck",
                                f"{pending['count']} events waiting", "restarted")
@@ -228,6 +269,10 @@ class Watchdog:
         if not self.orch.channel_send:
             return
         for row in await asyncio.to_thread(store.outbox_due, now):
+            # Still on its first try. A slow channel often delivers after all, and sending
+            # it again from here meanwhile is how the owner got the same text twice.
+            if row["id"] in self.orch.relaying:
+                continue
             try:
                 # Channels report most failures by returning False. Counting that as sent
                 # marked messages delivered that never left.
@@ -283,12 +328,19 @@ class Watchdog:
             self.strikes.pop((row["id"], "drifted"), None)
 
     async def _collect_garbage(self, now: float):
-        for row in await asyncio.to_thread(store.sessions, ("idle", "blocked"), "worker", 200):
+        # Oldest first, since those are the ones due: newest first, past the two hundredth
+        # the old ones were never looked at. A failed task is over too.
+        for row in await asyncio.to_thread(store.sessions, ("idle", "blocked", "failed"), "worker", 200, None, True):
             if now - row["updated"] > IDLE_ENDS_AFTER:
                 await asyncio.to_thread(store.session_set, row["id"], status="ended", question="",
                                         summary=row["summary"] or "Closed after two weeks idle.")
                 self.orch.workers._release_if_quiet(row["id"])
         await asyncio.to_thread(store.log_prune, now - TRANSCRIPTS_KEPT)
+        if now - self.pruned > 86_400:
+            self.pruned = now
+            gone = await asyncio.to_thread(store.prune, now)
+            if any(gone.values()):
+                logger.info("watchdog: pruned %s", gone)
         live = {r["id"] for r in await asyncio.to_thread(store.sessions, LIVE_STATUSES, "worker", 400)}
         processes.reap_left_behind(live, LEFT_BEHIND_LIMIT, now)
         await asyncio.to_thread(workspace.sweep, now)
@@ -306,19 +358,22 @@ class Watchdog:
         # wake would only be paused again. They start back up when it is not.
         if budget.check(thread="watchdog")[0] == "stop":
             return
+        if self.last_sweep and now - self.last_sweep > SLEPT_IF_GAP:
+            logger.info("watchdog: %d min since the last sweep, so the machine slept", (now - self.last_sweep) // 60)
+            self.woke = now
         watches = await asyncio.to_thread(db.list_watches, "active")
-        approvals = await asyncio.to_thread(runtime_store.approvals, "pending")
+        approvals = await asyncio.to_thread(runtime_store.approvals, "pending", 1000)
         rows = await asyncio.to_thread(store.sessions, (*LIVE_STATUSES, "idle", "blocked", "failed"), "worker", 400)
         pool = self.orch.workers
         for row in rows:
             try:
                 alive = row["id"] in pool.tasks and not pool.tasks[row["id"]].done()
-                facts = await asyncio.to_thread(gather, row, watches, approvals, alive)
+                facts = await asyncio.to_thread(gather, row, watches, approvals, alive, self.woke)
                 verdict = diagnose(facts, now)
                 if verdict == "provider_down":
                     await self._retry_stalled(row, now)
                 elif verdict:
-                    await self.handle(verdict, row)
+                    await self.handle(verdict, row, describe(facts, now))
                 else:
                     await self._judge(row, facts, now)
             except Exception:
@@ -332,6 +387,9 @@ class Watchdog:
                 await self.sweep(time.time())
             except Exception:
                 logger.exception("watchdog sweep failed")
+            # From the end of one sweep to the start of the next, so a sweep that was itself
+            # slow (a judge call against a provider not answering) is not read as sleep.
+            self.last_sweep = time.time()
             await asyncio.sleep(TICK)
 
     # ---------- talking to it ----------

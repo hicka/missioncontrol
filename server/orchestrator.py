@@ -652,6 +652,7 @@ class Orchestrator:
         self.agents = {a["id"]: a for a in cfg["agents"]}
         self.broadcast = None  # set by main: async fn(event: dict)
         self.channel_send = None  # set by main: async fn(channel, chat_id, text)
+        self.relaying: set[str] = set()   # outbox rows whose first send has not come back yet
         self._ledger_lock = asyncio.Lock()
         self.agent_state: dict[str, str] = {}  # aid -> idle|thinking|doing, across its sessions
         self._session_states: dict[str, dict[str, str]] = {}
@@ -1208,12 +1209,15 @@ class Orchestrator:
             text = " ".join(words[:cap]) + " … (the rest is in the app)"
         kept = await asyncio.to_thread(store.outbox_add, channel, chat, text, "", RELAY_RETRY)
         error = ""
+        self.relaying.add(kept)
         try:
             if await self.channel_send(channel, chat, text) is False:
                 error = f"{channel} did not take it"
         except Exception as exc:
             logger.exception("%s relay failed", channel)
             error = str(exc)[:200] or type(exc).__name__
+        finally:
+            self.relaying.discard(kept)
         await asyncio.to_thread(store.outbox_result, kept, not error, error, RELAY_RETRY)
         if not error:
             return {"sent": True}
@@ -1229,7 +1233,11 @@ class Orchestrator:
         try:
             who = self.agents.get(request["agent"], {}).get("name", request["agent"] or "An agent")
             what = recall.inline(request["command"], 200)
-            await self._ask_owner(f"approval:{request['id']}", f"{who} needs your OK to run: {what}\nIt's in your Inbox.",
+            # Why it is waiting, when the code that held it could say. A command by itself
+            # had the owner asking what each one did before they would decide.
+            reason = request.get("reason") or ""
+            why = f"\nHeld because {reason}." if " and it " in reason else ""
+            await self._ask_owner(f"approval:{request['id']}", f"{who} needs your OK to run: {what}{why}\nIt's in your Inbox.",
                                   f"{who}: {what}", meta={"approval": request["id"]})
             await self.router.aware(f"{who} is waiting on the owner's approval, and they have been told: {what}")
         except Exception:
@@ -2219,9 +2227,12 @@ class Orchestrator:
                     return (f"refused: {len(held)} of your commands are already waiting on the owner, and they did "
                             "not ask for this task. Do not try another way round. Finish what you can without "
                             "the network, then report what you found and what you would need.")
+                why = ledger.why_held(cmd, secrets=secrets_held, outward=held_outward or owners_alone,
+                                      network=inferred)
                 request = await asyncio.to_thread(
                     runtime_store.approval_create, aid, cmd, workdir,
-                    "outward command from work no person asked for")
+                    f"nobody asked for this step, and {why}" if why
+                    else "outward command from work no person asked for")
                 await self.hold_announced(request)
                 return (f"held for approval [{request['id']}]: no person asked for this step, so reaching the "
                         "network, anything with outward effect, or the owner's secrets and settings needs their "

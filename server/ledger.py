@@ -84,7 +84,8 @@ EGRESS = re.compile(r"""(?imx)
     (?: [\w./~-]*/ )?                   # /usr/bin/curl is still curl
     (
         curl | wget | nc | ncat | netcat | socat | ssh | scp | sftp | rsync | ftp | telnet |
-        https? | aws | gcloud | gsutil | az | doctl | fly | vercel | stripe |
+        https?(?!/) |                  # app/Http/Controllers is a folder, not HTTPie
+        aws | gcloud | gsutil | az | doctl | fly | vercel | stripe |
         gh\s+(?:gist|secret) | gh\s+auth\s+(?!status\b)[\w-]+ |
         gh\s+api\s+(?:[^|;&\n]*\s)?["']?https?:   # gh talks to whatever host a full URL names
     ) (?![\w.-]) | --show-token |
@@ -111,8 +112,45 @@ SENSITIVE = re.compile(r"""(?ix)
     ) | \.(?:p8|pem|p12|pfx)(?!\w)""")
 
 
+# Asking whether a .env is there reads nothing out of it. Reviewers do this in every fresh
+# copy of a repository, and each one used to cost the owner an approval. Only as a command
+# of its own: as an argument (cat ls .env) it is a file name being read.
+_ONLY_LOOKS = re.compile(r"""(?mx)
+    (?: ^ | ; | && | \|\| ) \s*
+    (?: ls (?: \s+ -[\w-]+ )* | test \s+ -[efsr] | \[\[? \s+ -[efsr] ) \s+
+    (?: [\w./~-]*/ )? \.env [\w.*-]* (?: \s+ 2> \s* /dev/null )?
+    (?= \s* (?: $ | ; | && | \|\| | \] ) )""")
+# Ways a later command can reach the name just looked at without spelling it, or run the
+# look inside something that reads its output. With any of these, nothing is set aside.
+_REUSES = re.compile(r"""\$_|!\$|!!|\$\(|`|<\(|[{(]|\\\n""")     # the last: a line carried on
+
+
+def _secret_named(command: str):
+    command = command or ""
+    return SENSITIVE.search(command if _REUSES.search(command) else _ONLY_LOOKS.sub(" ; ", command))
+
+
 def touches_secrets(command: str) -> bool:
-    return bool(SENSITIVE.search(command or ""))
+    return bool(_secret_named(command))
+
+
+def why_held(command: str, secrets: bool = True, outward: bool = True, network: bool = True) -> str:
+    """What about this command made it wait, in words the owner can read at a glance. They
+    asked "what does the command do?" three times in one evening, of notices that showed only
+    the command."""
+    run, parts = _as_run(command), []
+    hit = secrets and _secret_named(command)
+    if hit:
+        parts.append(f"it touches {hit.group(0).strip()}, where keys and private settings live")
+    hit = outward and OUTWARD.search(run)
+    if hit:
+        parts.append(f"it changes something outside this Mac ({' '.join(hit.group(0).split())[:40]})")
+    elif network:
+        hit = EGRESS.search(run)
+        if hit:
+            name = (hit.group(1) or hit.group(0)).strip().split()[0][:20]
+            parts.append(f"it reaches the network ({name})")
+    return " and ".join(parts)
 
 
 def is_outward(command: str) -> bool:

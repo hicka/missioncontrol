@@ -1250,7 +1250,9 @@ def test_a_plain_mission_lets_the_router_choose_and_keeps_its_task_id(isolated, 
 
 
 def test_naming_someone_skips_the_router(isolated, monkeypatch):
-    model = Model(monkeypatch, worker=[call("report", status="progress", summary="on it")])
+    # It ends there. Stopping after a progress report now brings a question to the Router,
+    # which is right and is not what this is about.
+    model = Model(monkeypatch, worker=[call("report", status="dropped", summary="on it")])
 
     async def main():
         o = make(monkeypatch)

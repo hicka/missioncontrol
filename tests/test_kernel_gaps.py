@@ -751,7 +751,8 @@ def test_plain_words_do_not_finish_a_task(isolated, monkeypatch):
         await until(lambda: store.session_get(row["id"])["status"] == "blocked")
         assert "without a report" in seen(model.worker_calls[1])
         assert [r["status"] for r in store.reports_of(row["id"])] == ["blocked"]
-        assert runtime_store.mission_get(mission["id"])["status"] == "waiting"
+        # The task is marked a moment after the session is, so wait for it rather than catch it between.
+        await until(lambda: runtime_store.mission_get(mission["id"])["status"] == "waiting")
         await wind_down(o)
     asyncio.run(main())
 
@@ -5233,3 +5234,423 @@ def test_the_router_and_the_watchdog_still_stop_at_their_limits(isolated, monkey
     """Only a Worker has somewhere to go on to. Each of those has one batch to read, and a bounded job."""
     assert router_mod.Router.on_tool_limit is sess.Session.on_tool_limit
     assert watchdog_mod.WatchdogSession.on_tool_limit is sess.Session.on_tool_limit
+
+
+@pytest.mark.parametrize("command", [
+    'cd ~/Sites/shop && grep -rn "round(" app/Http/Controllers --include=*.php | grep -i tax | head',
+    "cat > review.json <<'EOF'\n{\"body\": \"see `app/Http/Kernel.php`\"}\nEOF\nphp -l app/Http/Kernel.php",
+    "sed -n 1,40p app/Https/Thing.php",
+])
+def test_a_folder_named_like_a_network_client_is_not_one(command):
+    # Caught live: a reviewer's grep through app/Http/Controllers waited on the owner as
+    # "reaching the network", and so did the review that quoted that path.
+    assert not ledger.reaches_network(command)
+
+
+@pytest.mark.parametrize("command", ["http GET example.com", "https example.com/x", "/usr/local/bin/http :8000"])
+def test_the_network_client_itself_still_counts(command):
+    assert ledger.reaches_network(command)
+
+
+@pytest.mark.parametrize("command", [
+    "ls .env* 2>/dev/null", "git log --oneline -2 && ls .env*", "test -f .env && echo yes",
+    "[ -f .env ] || echo none", "ls -la ~/Sites/shop/.env; echo done", "ls .env\necho next",
+])
+def test_asking_whether_an_env_file_exists_reads_nothing_from_it(command):
+    assert not ledger.touches_secrets(command)
+
+
+@pytest.mark.parametrize("command", [
+    "cat .env", "ls .env | xargs cat", "cat $(ls .env)", "cat `ls .env`", "ls .env && grep KEY .env",
+    "ls .env > /tmp/x; cat .env", "ls ~/.ssh", "test -f .env && cat .env", "[ -f .env ] && cp .env /tmp/x",
+    # The name reused without being spelled again, the look run inside something that reads
+    # it, and the look as a mere argument: all found by a review of the first version of this.
+    "test -f .env && cat $_", 'ls .env && cat "$_"', "ls .env; cat !$", "cat $(ls .env;)", "cat `ls .env;`",
+    "cat $(ls .env && true)", "{ ls .env; } | xargs cat", "while read f; do cat $f; done < <(ls .env;)",
+    "cat ls .env", "base64 ls .env", "tar cf - ls .env", "cat [ -f .env", "cat \\\nls .env", "(ls .env) | xargs cat",
+])
+def test_anything_that_could_read_an_env_file_is_still_private(command):
+    assert ledger.touches_secrets(command)
+
+
+def test_a_held_command_says_why_it_was_held(isolated, monkeypatch):
+    # The owner asked "what does the command do?" of three notices in one evening.
+    monkeypatch.setattr(tools, "run_terminal", AsyncMock(return_value="exit 0"))
+    monkeypatch.setattr(push, "notify", AsyncMock(return_value=True))
+    Hold(monkeypatch, worker=[call("terminal", command="curl -s https://example.com/x"),
+                              call("report", status="dropped", summary="x")])
+
+    async def main():
+        o = make(monkeypatch)
+        await o.workers.spawn(second(o), "t", "", [], strength="inferred")
+        await until(lambda: runtime_store.approvals("pending"))
+        assert "it reaches the network (curl)" in runtime_store.approvals("pending")[0]["reason"]
+        await until(lambda: any("Held because nobody asked" in m["text"] for m in chat(o, sender=o.lead)))
+        await wind_down(o)
+    asyncio.run(main())
+
+
+# ---------- a progress report is not an ending ----------
+
+def test_stopping_after_a_progress_report_never_closes_the_task_as_done(isolated, monkeypatch):
+    # Seen live: "next I will capture the screens", a notice, NO_REPLY, and the task was
+    # filed ready with none captured. The finish line was empty, so nothing counted as open.
+    model = Hold(monkeypatch)
+    model.worker = [call("report", status="progress", summary="Next I will capture the ten screenshots."),
+                    say("NO_REPLY"), say("Nothing further for now.")]
+
+    async def main():
+        o = make(monkeypatch)
+        aid = second(o)
+        mission = runtime_store.mission_create(aid, f"dm:{o.lead}", "screenshots")
+        row = await o.workers.spawn(aid, "Capture the screenshots", "", [asked(o)], mission=mission["id"])
+        await until(lambda: store.session_get(row["id"])["status"] == "blocked")
+        statuses = [r["status"] for r in store.reports_of(row["id"])]
+        assert "ready" not in statuses and statuses[0] == "blocked"
+        assert "Should it carry on?" in store.session_get(row["id"])["question"]
+        assert runtime_store.mission_get(mission["id"])["status"] != "completed"
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_going_quiet_after_progress_on_a_follow_up_is_asked_once_then_blocked(isolated, monkeypatch):
+    model = Hold(monkeypatch)
+    model.worker = [call("report", status="ready", summary="Opened the PR.",
+                         checks=[{"check": "open the PR", "done": True, "how": "gh pr view"}]),
+                    call("report", status="progress", summary="Two findings; fixing both next."),
+                    say("NO_REPLY"), say("NO_REPLY")]
+
+    async def main():
+        o = make(monkeypatch)
+        aid = second(o)
+        mission = runtime_store.mission_create(aid, f"dm:{o.lead}", "pr")
+        row = await o.workers.spawn(aid, "Open the PR", "", [asked(o)], mission=mission["id"], follow=["github:a/b#1"])
+        await until(lambda: store.reports_of(row["id"]))
+        await until(lambda: row["id"] not in o.workers.tasks)
+        await o.outside_event("github", "github:a/b#1", "review: two things to fix", actor="x")
+        await until(lambda: store.session_get(row["id"])["status"] == "blocked")
+        assert any("Your last report was progress" in flat(c["messages"][-1]) for c in model.worker_calls)
+        assert runtime_store.mission_get(mission["id"])["status"] != "completed"
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_a_worker_that_carries_on_after_the_progress_reminder_is_left_to(isolated, monkeypatch):
+    model = Hold(monkeypatch)
+    model.worker = [call("report", status="progress", summary="Next: run the count."), say("NO_REPLY"),
+                    call("report", status="ready", summary="Counted.",
+                         checks=[{"check": "count them", "done": True, "how": "ran wc -l"}])]
+
+    async def main():
+        o = make(monkeypatch)
+        row = await o.workers.spawn(second(o), "Count them", "", [asked(o)])
+        await until(lambda: store.reports_of(row["id"]) and store.reports_of(row["id"])[0]["status"] == "ready")
+        assert "blocked" not in [r["status"] for r in store.reports_of(row["id"])]
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_a_report_read_alongside_the_owners_message_still_reaches_them(isolated, monkeypatch):
+    # The owner's message was answered by the dispatch's ack, which left nobody waiting,
+    # and what the Router then said about the report was logged and dropped.
+    model = Hold(monkeypatch)
+
+    async def main():
+        o = make(monkeypatch)
+        aid = second(o)
+        w = store.session_create("worker", aid, title="Count things", status="idle")
+        rp = store.report_add(w["id"], None, "ready", "All 3 are counted.")
+        tr, _ = store.trigger_add("gui", f"dm:{o.lead}", "also fix the other thing", "owner", True, "explicit")
+        model.router = [call("dispatch", trigger_ids=[tr["id"]], profile=aid, title="other", ack="On it."),
+                        say("The count is done: all 3 are counted."), say("NO_REPLY"), say("NO_REPLY")]
+        store.inbox_put("router", "trigger", "", tr["id"], {"from_owner": True, "voice": False}, True, 1)
+        store.trigger_dispose(tr["id"], "queued")
+        store.inbox_put("router", "report", "", rp["id"], {}, True, 0)
+        o.router.wake()
+        await until(lambda: any("all 3 are counted" in m["text"] for m in chat(o, sender=o.lead)))
+        assert any(m["text"] == "On it." for m in chat(o, sender=o.lead))
+        # And the report says when it was written, so an old one is not read as now.
+        assert "(written " in seen(model.router_calls[0])
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_a_router_not_reading_because_the_budget_is_spent_is_not_restarted_for_it(isolated, monkeypatch):
+    import budget
+
+    async def main():
+        o = make(monkeypatch)
+        await until(lambda: o.router.task and not o.router.task.done())
+        store.inbox_put("router", "system", "an event that has waited")
+        restarts = AsyncMock()
+        monkeypatch.setattr(o.router, "restart", restarts)
+        monkeypatch.setattr(store, "inbox_should_wake", lambda sid: {"count": 1, "oldest": time.time() - 3600, "priority": 0})
+        monkeypatch.setattr(budget, "check", lambda **kw: ("stop", "spent"))
+        await o.watchdog._check_router(time.time())
+        restarts.assert_not_called()
+        monkeypatch.setattr(budget, "check", lambda **kw: ("ok", ""))
+        await o.watchdog._check_router(time.time())
+        restarts.assert_called_once()
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_a_message_still_on_its_first_send_is_not_sent_again_by_the_retry(isolated, monkeypatch):
+    # The first try can take two minutes on a slow channel and the retry looked after 30 s.
+    sends, release = [], asyncio.Event()
+
+    async def main():
+        o = make(monkeypatch)
+
+        async def slow(channel, chat, text):
+            sends.append(text)
+            await release.wait()
+            return True
+        o.channel_send = slow
+        first = asyncio.create_task(o._relay("imessage", "chat1", f"dm:{o.lead}", o.lead, "the answer"))
+        await until(lambda: sends)
+        await o.watchdog._retry_outbox(time.time() + 3600)
+        assert sends == ["the answer"]
+        release.set()
+        assert (await first) == {"sent": True}
+        await o.watchdog._retry_outbox(time.time() + 3600)
+        assert sends == ["the answer"]
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_what_nothing_reads_any_more_is_pruned_and_the_rest_kept(isolated, monkeypatch):
+    now = time.time()
+    old = now - 40 * 86_400
+    sent, waiting = store.outbox_add("imessage", "c", "old and sent"), store.outbox_add("imessage", "c", "old, never sent")
+    store.outbox_result(sent, True)
+    row = store.session_create("worker", "cto", title="t", status="idle")
+    store.inbox_put(row["id"], "system", "taken long ago")
+    store.inbox_put(row["id"], "system", "never taken")
+    with db._lock:
+        c = store._ensure()
+        c.execute("UPDATE outbox SET ts=?", (old,))
+        c.execute("UPDATE session_inbox SET taken=? WHERE text='taken long ago'", (old,))
+        c.execute("UPDATE session_inbox SET ts=?", (old,))
+        c.commit()
+    gone = store.prune(now)
+    assert gone["outbox"] == 1 and gone["inbox"] == 1
+    assert [r["id"] for r in store.outbox_stuck()] == [waiting]
+    assert [i["text"] for i in store.inbox_pending(row["id"])] == ["never taken"]
+
+
+def test_a_garbled_call_is_refused_in_words_and_an_unknown_tool_is_told_what_there_is(isolated, monkeypatch):
+    ran = AsyncMock(return_value="exit 0")
+    monkeypatch.setattr(tools, "run_terminal", ran)
+    model = Hold(monkeypatch)
+    garbled = {"content": [{"type": "tool_use", "id": "g1", "name": "terminal", "input": '{"command": "ls'}],
+               "stop_reason": "tool_use"}
+    model.worker = [garbled, call("termnal", command="ls"), call("report", status="dropped", summary="x")]
+
+    async def main():
+        o = make(monkeypatch)
+        await o.workers.spawn(second(o), "t", "", [asked(o)])
+        await until(lambda: len(model.worker_calls) >= 3)
+        ran.assert_not_called()
+        assert "not valid JSON" in seen(model.worker_calls[1])
+        # What went back to the model is an object, as the provider requires.
+        stored = [b for m in model.worker_calls[1]["messages"] for b in (m["content"] if isinstance(m["content"], list) else [])
+                  if isinstance(b, dict) and b.get("type") == "tool_use"]
+        assert stored and all(isinstance(b["input"], dict) for b in stored)
+        assert "Did you mean terminal" in seen(model.worker_calls[2])
+        await wind_down(o)
+    asyncio.run(main())
+
+
+# ---------- the services that keep it going ----------
+
+def test_a_finished_run_is_passed_on_once_and_a_rerun_once_more(monkeypatch, poll_state):
+    # Every poll passed on every finished run on the page again: 30,000 log lines in a week.
+    done = {"id": 200, "status": "completed", "conclusion": "failure", "name": "CI", "head_branch": "m",
+            "html_url": "u", "actor": {"login": "x"}, "event": "push"}
+    monkeypatch.setattr(github, "_gh", _poll_gh({"actions/runs": {"workflow_runs": [done]}}))
+    assert [e["key"] for e in asyncio.run(github.poll_once()) if e["kind"] == "ci"] == ["run:a/b:200"]
+    assert not [e for e in asyncio.run(github.poll_once()) if e["kind"] == "ci"]
+    monkeypatch.setattr(github, "_gh", _poll_gh({"actions/runs": {"workflow_runs": [{**done, "run_attempt": 2}]}}))
+    assert [e["key"] for e in asyncio.run(github.poll_once()) if e["kind"] == "ci"] == ["run:a/b:200:2"]
+    assert not [e for e in asyncio.run(github.poll_once()) if e["kind"] == "ci"]
+
+
+def test_a_run_whose_event_could_not_be_passed_on_is_read_again(monkeypatch, poll_state):
+    done = {"id": 200, "status": "completed", "conclusion": "failure", "name": "CI", "head_branch": "m",
+            "html_url": "u", "actor": {"login": "x"}, "event": "push"}
+    monkeypatch.setattr(github, "_gh", _poll_gh({"actions/runs": {"workflow_runs": [done]}}))
+
+    async def broken(evt):
+        raise RuntimeError("no")
+    with pytest.raises(RuntimeError):
+        asyncio.run(github.poll_once(broken))
+    assert [e["key"] for e in asyncio.run(github.poll_once()) if e["kind"] == "ci"] == ["run:a/b:200"]
+
+
+def test_a_gh_that_hangs_says_so_in_its_error(monkeypatch):
+    class Hung:
+        returncode = None
+
+        async def communicate(self, data=None):
+            await asyncio.sleep(3600)
+
+    async def main():
+        monkeypatch.setattr(processes, "terminate", AsyncMock())
+        real = asyncio.wait_for
+        monkeypatch.setattr(github.asyncio, "wait_for", lambda aw, timeout: real(aw, 0.01))
+        with pytest.raises(asyncio.TimeoutError) as caught:
+            await github._communicate(Hung())
+        assert "did not answer" in str(caught.value)
+    asyncio.run(main())
+
+
+def test_settings_are_replaced_whole_and_a_reader_never_sees_them_empty(tmp_path, monkeypatch):
+    import threading
+    import settings as cfg
+    monkeypatch.setattr(cfg, "SETTINGS_PATH", tmp_path / "settings.yaml")
+    monkeypatch.setattr(cfg, "_parsed", None)
+    cfg.save({"github": {"secret": "s" * 64}, "pad": "x" * 200_000})
+    os.chmod(cfg.SETTINGS_PATH, 0o600)
+    empty, stop = [], threading.Event()
+
+    def read():
+        while not stop.is_set():
+            if not cfg.load().get("github"):
+                empty.append(1)
+    reader = threading.Thread(target=read)
+    reader.start()
+    for n in range(40):
+        cfg.update("runtime_services", {"x": bool(n % 2)})
+    stop.set()
+    reader.join()
+    assert not empty
+    assert (cfg.SETTINGS_PATH.stat().st_mode & 0o777) == 0o600
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+    # Each caller gets its own copy, and a change to the file is seen.
+    cfg.load()["github"]["secret"] = "changed"
+    assert cfg.load()["github"]["secret"] == "s" * 64
+    cfg.update("github", {"secret": "new"})
+    assert cfg.load()["github"]["secret"] == "new"
+
+
+def test_the_supervisor_outlives_a_pass_that_fails_and_a_loop_that_ends_is_started_again(monkeypatch):
+    import runtime
+    import settings as cfg
+    monkeypatch.setattr(cfg, "load", lambda: {})
+    runs, passes = [], []
+
+    async def loop_that_dies():
+        runs.append(1)
+        raise RuntimeError("one bad read")
+
+    async def main():
+        registry = runtime.Registry()
+        registry.add("poll", "Poll", "d", run=loop_that_dies, auto_restart=True)
+        await registry.reconcile()
+        await asyncio.sleep(0)
+        await registry.reconcile()
+        service = registry.services["poll"]
+        assert service.state == "failed" and "one bad read" in service.error and service.retry_at
+        service.retry_at = 1.0
+        await registry.reconcile()
+        await asyncio.sleep(0)
+        assert len(runs) == 2
+
+        real = registry.reconcile
+
+        async def flaky():
+            passes.append(1)
+            if len(passes) == 1:
+                raise OSError("settings.yaml caught mid-edit")
+            if len(passes) >= 3:
+                raise asyncio.CancelledError
+            await real()
+        monkeypatch.setattr(runtime, "registry", registry)
+        monkeypatch.setattr(registry, "reconcile", flaky)
+
+        async def no_sleep(_):
+            return None
+        monkeypatch.setattr(runtime.asyncio, "sleep", no_sleep)
+        with pytest.raises(asyncio.CancelledError):
+            await runtime.supervise()
+        assert len(passes) == 3
+    asyncio.run(main())
+
+
+def test_a_held_command_nobody_answered_for_a_day_is_not_something_to_wait_for(isolated):
+    now = time.time()
+    row = store.session_create("worker", "cto", title="t", status="waiting")
+    store.session_set(row["id"], progress=now - 3 * 86_400)
+    row = store.session_get(row["id"])
+    fresh = [{"session": row["id"], "ts": now - 3600}]
+    stale = [{"session": row["id"], "ts": now - 2 * 86_400}]
+    assert watchdog_mod.diagnose(watchdog_mod.gather(row, [], fresh, False), now) is None
+    facts = watchdog_mod.gather(row, [], stale, False)
+    assert watchdog_mod.diagnose(facts, now) == "stranded"
+    assert "unanswered for over a day" in watchdog_mod.describe(facts, now)
+
+
+def test_time_asleep_is_not_time_spent_hung(isolated):
+    now = time.time()
+    row = store.session_create("worker", "cto", title="t", status="working")
+    store.session_set(row["id"], progress=now - 2 * watchdog_mod.HUNG_AFTER)
+    row = store.session_get(row["id"])
+    assert watchdog_mod.diagnose(watchdog_mod.gather(row, [], [], True), now) == "hung"
+    assert watchdog_mod.diagnose(watchdog_mod.gather(row, [], [], True, woke=now - 60), now) is None
+    assert "no step for" in watchdog_mod.describe(watchdog_mod.gather(row, [], [], True), now)
+
+
+def test_a_session_still_in_trouble_after_the_owner_was_told_is_still_woken(isolated, monkeypatch):
+    async def main():
+        o = make(monkeypatch)
+        row = store.session_create("worker", second(o), title="t", status="idle")
+        woken = []
+        monkeypatch.setattr(o.workers, "wake", lambda sid, priority=False: woken.append(sid))
+        monkeypatch.setattr(o.watchdog, "escalate", AsyncMock())
+        for _ in range(5):
+            await o.watchdog.handle("not_running", row, "1 unread")
+        assert len(woken) == 5
+        o.watchdog.escalate.assert_called_once()
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_a_restart_does_not_run_a_worker_whose_question_is_still_open(isolated, monkeypatch):
+    model = Hold(monkeypatch, worker=[say("NO_REPLY")])
+
+    async def main():
+        o = make(monkeypatch)
+        asking = store.session_create("worker", second(o), title="asking", status="blocked")
+        store.session_set(asking["id"], question="Which one?")
+        busy = store.session_create("worker", second(o), title="busy", status="waiting")
+        for sid in (asking["id"], busy["id"]):
+            store.job_add(sid, "terminal", "sleep 100")
+        await o.workers.recover()
+        await until(lambda: model.worker_calls)
+        await asyncio.sleep(0.2)
+        assert store.inbox_should_wake(asking["id"])["count"] == 0
+        assert len(store.inbox_pending(asking["id"])) == 1      # kept for when it is answered
+        assert store.session_get(asking["id"])["status"] == "blocked"
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_a_report_read_with_the_owners_message_does_not_move_where_their_reply_goes(isolated, monkeypatch):
+    async def main():
+        o = make(monkeypatch)
+        router = o.router
+        router.unanswered = [{"id": "tr_a", "thread": "telegram:1", "from_owner": True}]
+        router.stream_thread = "telegram-conversation"
+        router.on_drained([{"kind": "report", "ref": "rp_1", "meta": {}}])
+        assert [t["id"] for t in router.unanswered] == ["rp_1", "tr_a"]
+        assert router.stream_thread == "telegram-conversation"
+        await wind_down(o)
+    asyncio.run(main())
+
+
+def test_two_clearing_up_after_one_session_pass_a_message_on_once(isolated):
+    row = store.session_create("worker", "cto", title="t", status="ended")
+    store.inbox_put(row["id"], "trigger", "owner: wait", "tr_x", {"from_owner": True})
+    assert [i["ref"] for i in store.inbox_claim_unread(row["id"])] == ["tr_x"]
+    assert store.inbox_claim_unread(row["id"]) == []

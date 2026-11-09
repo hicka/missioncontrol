@@ -69,7 +69,9 @@ ROUTER_TOOLS = [
                 "title": {"type": "string", "description": "a few words naming the task"},
                 "note": {"type": "string", "description": "at most 30 words: routing background or an explicit "
                                                           "constraint from the owner. Never an implementation plan"},
-                "ack": {"type": "string", "description": "optional one short line to the owner naming what you started"},
+                "ack": {"type": "string", "description": "one short line to the owner naming what you started. Give it "
+                                                         "whenever the events are the owner's own request, so they "
+                                                         "are not left wondering whether it was heard"},
                 "speculative": {"type": "boolean", "description": "acting ahead: nobody asked, deliver only "
                                                                   "if the result is confirmed and useful"},
             },
@@ -190,7 +192,7 @@ DISPATCH with the event ids and the right person from the roster. Pass the origi
 SPEAK only when a person must decide or can use a result. Ordinary progress stays internal. Do not repeat a milestone because another report came in. Do not tell the owner what you ignored or that nothing is happening; quiet is the default, and they can see it all on the Activity page. The exception is something they would want to act on, such as someone impersonating them. When there is nothing to say, your whole reply is exactly NO_REPLY.
 
 FACTS come from reports and the events in front of you, and nowhere else. Never state something as done unless a report says so. Do not say who did something unless a report or event says who: under the owner's GitHub login an agent can be the one acting, and such an event says so. When a worker is on it, wait for its report rather than filling in what probably happened.
-A report is true as of when it was written (OPEN TASKS gives the time), not now. When the owner asks how a task is going and its last report is more than a few minutes old, attach their message to that task's worker so it checks, and tell them you are checking; never give the old report as how things stand. If you do say what it last said, say when.
+A report is true as of when it was written (each one says, and OPEN TASKS gives the time), not now. OPEN TASKS is everything anyone is working on: a task that is not listed is not under way, so never say it is still running or being done. Say how it ended, from its last report and when that was, or find it with recall. When the owner asks how a listed task is going and its last report is more than a few minutes old, attach their message to that task's worker so it checks, and tell them you are checking; never give the old report as how things stand. If you do say what it last said, say when. Say "you", never "the owner", when you are talking to them.
 
 HOW MUCH TO SAY depends on where it lands.
 - Phone (iMessage, Telegram, WhatsApp): like a colleague texting. Short conclusions and direct questions, at most 100 words a reply, hard limit.
@@ -535,10 +537,17 @@ class Router(sess.Session):
                 self.voice = bool(meta.get("voice"))
                 self.shortened = False
                 self.stream_thread = self._conversation_of(trigger["thread"])
-            elif item["kind"] == "report" and not self.unanswered:
+            elif item["kind"] == "report" and not any(t["id"] == item["ref"] for t in self.unanswered):
                 # A report is news for the person the task was for. There is one of them,
                 # so it goes wherever they last spoke, not where the task happened to start.
+                # Also when they are waiting on something else in the same batch: answering
+                # that used to leave nobody waiting, and what was said of the report went nowhere.
                 thread = self.orch.owner_thread()
+                if any(t.get("from_owner") for t in self.unanswered):
+                    # Behind their own message: a reply with no thread named goes to whoever
+                    # is last here, and that stays the place they asked from.
+                    self.unanswered.insert(0, {"id": item["ref"], "thread": thread})
+                    continue
                 self.unanswered.append({"id": item["ref"], "thread": thread})
                 self.shortened = False
                 self.stream_thread = self._conversation_of(thread)
@@ -562,7 +571,10 @@ class Router(sess.Session):
             (background if item["kind"] in ("fyi", "report_fyi") else decide_now).append(line)
         parts = [f"[{now}]"]
         board = self.task_board()
-        if board != self.last_board:
+        # Whenever it changes, and whenever the owner is here: what they ask is most often
+        # how something stands, and the answer must not come from a board read hours ago.
+        asking = any(i["kind"] == "trigger" and (i.get("meta") or {}).get("from_owner") for i in items)
+        if board != self.last_board or asking:
             self.last_board = board
             parts.append(board)
         parts.extend(decide_now)
@@ -603,8 +615,14 @@ class Router(sess.Session):
                 return ""
             row = store.session_get(report["session"]) or {}
             cap = INBOX_CARD if kind == "report" else FYI_CARD
+            # When it was written, and whether the same worker has said something since. A
+            # waiting report read after a backlog was passed on as how things stood.
+            written = datetime.datetime.fromtimestamp(report["ts"]).strftime("%a %H:%M")
+            newest = store.reports_of(report["session"], 1)
+            later = (f"; superseded by its later report {newest[0]['id']} ({newest[0]['status']})"
+                     if newest and newest[0]["id"] != report["id"] else "")
             head = f"[{report['id']}] {report['session']} ({row.get('profile')}, task {report['mission'] or '-'}) " \
-                   f"{report['status']}: {row.get('title', '')}"
+                   f"{report['status']} (written {written}{later}): {row.get('title', '')}"
             if kind == "report_fyi":
                 head = "[fyi] " + head
             lines = [head, recall.inline(report["summary"], cap, report["id"])]

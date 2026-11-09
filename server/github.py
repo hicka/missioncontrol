@@ -42,6 +42,7 @@ DEFAULTS = {
 }
 
 GH_ENV_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+RUNS_REMEMBERED = 200   # finished workflow runs per repository; a poll reads the newest 30
 
 
 def settings() -> dict:
@@ -64,7 +65,9 @@ def _load_state() -> dict:
 
 
 def _save_state(state: dict):
-    STATE_PATH.write_text(json.dumps(state, indent=1))
+    # Whole or not at all: a reader in the middle of a plain write sees an empty file,
+    # takes it for a first run and forgets every PR it knew.
+    cfg.write_whole(STATE_PATH, json.dumps(state, indent=1))
 
 
 async def _gh(*args: str) -> tuple[int, str]:
@@ -85,7 +88,9 @@ async def _communicate(proc, data: bytes | None = None) -> str:
         out, _ = await asyncio.wait_for(proc.communicate(data), timeout=60)
     except asyncio.TimeoutError:
         await processes.terminate(proc)
-        raise
+        # A bare TimeoutError prints as nothing, which is how "poll failed for x: " got
+        # into the log 27 times and would have reached the owner as a blank.
+        raise asyncio.TimeoutError("gh did not answer within 60 seconds") from None
     return out.decode("utf-8", errors="replace")
 
 
@@ -809,11 +814,17 @@ async def _poll_repo(repo: str, rs: dict) -> list[dict]:
     # again until it has finished.
     if "run_floor" not in rs:
         rs["run_floor"] = rs.get("last_run_id") or max((r["id"] for r in runs), default=0)
+    # The floor never moves, so what has been passed on is remembered by key. Without that
+    # every finished run on the page was passed on again each poll: 30,000 log lines in a
+    # week, and only the events table stood between a restart and hearing them all twice.
+    done = list(rs.get("runs_done") or [])
     for run in reversed(runs):
         if run["id"] > rs["run_floor"] and run.get("status") == "completed":
             evt = _run_event(repo, run)
-            if evt:
+            if evt and evt["key"] not in done:
                 events.append(evt)
+                done.append(evt["key"])
+    rs["runs_done"] = done[-RUNS_REMEMBERED:]
 
     if not first_run and rs.get("comments_since"):
         comments = await _read(f"repos/{repo}/issues/comments?since={since}&sort=updated&direction=asc&per_page=100")

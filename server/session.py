@@ -683,15 +683,23 @@ class Session:
                 continue
             await self.orch.session_state(self, "doing")
             results = []
-            for use in uses:
-                out = await self.call_tool(use)
-                self.evidence.append(str(out)[:8000])
-                failed = getattr(out, "status", "completed") != "completed"
-                self.rec["tools"] += 1
-                self.rec["errors"] += failed
-                self.rec["streak"] = self.rec["streak"] + 1 if failed else 0
-                results.append({"type": "tool_result", "tool_use_id": use["id"],
-                                "content": getattr(out, "content", None) or str(out), "is_error": failed})
+            try:
+                for use in uses:
+                    out = await self.call_tool(use)
+                    self.evidence.append(str(out)[:8000])
+                    failed = getattr(out, "status", "completed") != "completed"
+                    self.rec["tools"] += 1
+                    self.rec["errors"] += failed
+                    self.rec["streak"] = self.rec["streak"] + 1 if failed else 0
+                    results.append({"type": "tool_result", "tool_use_id": use["id"],
+                                    "content": getattr(out, "content", None) or str(out), "is_error": failed})
+            except asyncio.CancelledError:
+                # Stopped part-way through several calls. What did finish is kept, or on the
+                # way back every one of them reads as "may or may not have taken effect",
+                # which is an invitation to do the finished ones again.
+                if results:
+                    await self._append(transcript, "user", results)
+                raise
             if self.rec["streak"] >= FLAIL_RUN and not self.rec["nudged"]:
                 self.rec["nudged"] = True
                 self.rec["flags"].add("flailing")

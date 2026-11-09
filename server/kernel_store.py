@@ -406,7 +406,7 @@ def session_stand_down(sid: str) -> dict | None:
 
 
 def sessions(statuses: tuple | None = None, kind: str | None = None, limit: int = 100,
-             profile: str | None = None) -> list[dict]:
+             profile: str | None = None, oldest: bool = False) -> list[dict]:
     where, args = [], []
     if statuses:
         where.append("status IN (" + ",".join("?" * len(statuses)) + ")"), args.extend(statuses)
@@ -416,7 +416,8 @@ def sessions(statuses: tuple | None = None, kind: str | None = None, limit: int 
         where.append("profile=?"), args.append(profile)
     sql = "SELECT * FROM sessions" + (" WHERE " + " AND ".join(where) if where else "")
     with db._lock:
-        return _rows(_ensure().execute(sql + " ORDER BY updated DESC LIMIT ?", (*args, limit)))
+        return _rows(_ensure().execute(sql + f" ORDER BY updated {'ASC' if oldest else 'DESC'} LIMIT ?",
+                                       (*args, limit)))
 
 
 def direct_line(profile: str) -> dict | None:
@@ -553,6 +554,29 @@ def log_prune(before: float) -> int:
         return cur.rowcount
 
 
+def prune(now: float) -> dict:
+    """What nothing reads any more. None of it was ever deleted: messages already sent,
+    mail already taken, transcript rows a compaction had replaced, and every tool call
+    since the first day. Events stay, because telling a new one from a repeat rests on them."""
+    day = 86_400
+    gone = {}
+    with db._lock:
+        c = _ensure()
+        for name, sql, age in (
+                ("outbox", "DELETE FROM outbox WHERE (sent IS NOT NULL OR gave_up IS NOT NULL) AND ts<?", 7),
+                ("inbox", "DELETE FROM session_inbox WHERE taken IS NOT NULL AND taken<?", 30),
+                ("log", "DELETE FROM session_log WHERE live=0 AND ts<?", 30),
+                ("findings", "DELETE FROM findings WHERE ts<?", 30)):
+            gone[name] = c.execute(sql, (now - age * day,)).rowcount
+        try:
+            gone["executions"] = c.execute("DELETE FROM executions WHERE status!='running' AND ts<?",
+                                           (now - 60 * day,)).rowcount
+        except Exception:
+            gone["executions"] = 0     # that table belongs to the runtime store and may not exist yet
+        c.commit()
+    return gone
+
+
 # ---------- inbox ----------
 
 def inbox_put(session: str, kind: str, text: str, ref: str = "", meta: dict | None = None,
@@ -605,6 +629,17 @@ def inbox_withdraw(session: str, ids: list[int]):
         c.executemany("UPDATE session_inbox SET taken=? WHERE id=? AND session=?",
                       [(time.time(), i, session) for i in ids])
         c.commit()
+
+
+def inbox_claim_unread(session: str) -> list[dict]:
+    """Everything unread, taken in the same step as it is read, so two callers clearing up
+    after one session cannot both pass the same message on."""
+    with db._lock:
+        c = _ensure()
+        rows = _rows(c.execute("SELECT * FROM session_inbox WHERE session=? AND taken IS NULL ORDER BY id", (session,)))
+        c.execute("UPDATE session_inbox SET taken=? WHERE session=? AND taken IS NULL", (time.time(), session))
+        c.commit()
+    return rows
 
 
 def inbox_should_wake(session: str) -> dict:

@@ -224,6 +224,7 @@ class Worker(sess.Session):
         self.acted = False
         self.nudged_wait = False
         self.nudged_report = False
+        self.nudged_progress = False
         self.heard_owner = False
         self.stretches = 0
         self.trail_unasked = False
@@ -292,6 +293,7 @@ class Worker(sess.Session):
 
     async def run(self, trigger=""):
         self.nudged_report, self.said_plain = False, ""
+        self.nudged_progress = False
         # Taking stock is not moving on: what the owner just said is still what it is acting on.
         self.heard_owner = self.carrying_on and self.heard_owner
         self.reported = None
@@ -505,7 +507,7 @@ class Worker(sess.Session):
 
     async def _outstanding(self) -> dict:
         watches = await asyncio.to_thread(db.list_watches, "active")
-        approvals = await asyncio.to_thread(runtime_store.approvals, "pending")
+        approvals = await asyncio.to_thread(runtime_store.approvals, "pending", 1000)
         jobs = await asyncio.to_thread(store.jobs_of, self.id, "running")
         return {"jobs": jobs,
                 "watches": [w for w in watches if w.get("session") == self.id],
@@ -557,6 +559,27 @@ class Worker(sess.Session):
         self.rec["flags"].add("no_report")
         await asyncio.to_thread(store.inbox_put, self.id, "system", self.REPORT_NUDGE)
 
+    PROGRESS_NUDGE = ("Your last report was progress: it said what you would do next, and then your turn ended with "
+                      "that not done. A notice that needs nothing from you does not end the work. Carry on from what "
+                      "you said you would do, now. If something stands in the way, report it: waiting if something "
+                      "armed will wake you, blocked with the question if it takes a person, failed if it cannot be done.")
+
+    async def _left_mid_work(self, row: dict, last: dict | None, said: str = "") -> bool:
+        """A progress report says what comes next, so stopping after one is never the end.
+        A Worker said it would capture ten screens, a job notice woke it, it answered that
+        the notice needed nothing, and the task closed as done with none of them taken."""
+        if not last or last["status"] != "progress" or row["direct"] or row["speculative"] or (
+                row.get("meta") or {}).get("one_shot"):
+            return False
+        if not self.nudged_progress and not said:
+            self.nudged_progress = True
+            self.rec["flags"].add("stopped_after_progress")
+            await asyncio.to_thread(store.inbox_put, self.id, "system", self.PROGRESS_NUDGE)
+            return True
+        await self.deliver_report("blocked", said or last["summary"],
+                                  "It said what it would do next and then stopped without doing it. Should it carry on?")
+        return True
+
     async def _still_waiting(self, text: str):
         """It has said where this stands, and a sentence after that changes nothing. Reminding
         it to report once filed a Worker waiting on the owner as finished, its authority gone.
@@ -590,6 +613,8 @@ class Worker(sess.Session):
                 await self.deliver_report("waiting", marked, wake=NOT_CONFIRMED not in reports[0]["summary"])
             else:
                 await self._still_waiting(text)
+            return
+        if await self._left_mid_work(row, reports[0] if reports else None, marked):
             return
         await self.deliver_report("ready", marked)
 
@@ -634,6 +659,8 @@ class Worker(sess.Session):
         status = last["status"] if last else None
         # Going quiet after a progress report closed a task with most of it undone.
         if status in (None, "progress") and await self._stopped_short(row, last["summary"] if last else ""):
+            return
+        if await self._left_mid_work(row, last):
             return
         # A question the owner has since answered is not still open.
         answered = status == "blocked" and not row.get("question")
@@ -986,7 +1013,11 @@ class Pool:
             while True:
                 self.rewake.discard(sid)
                 row = await asyncio.to_thread(store.session_get, sid)
-                if not row or row["status"] == "ended":
+                if not row:
+                    return
+                if row["status"] == "ended":
+                    # Something sent in the instant it ended. Nobody will read it here.
+                    await self._pass_on_unread(sid)
                     return
                 pending = await asyncio.to_thread(store.inbox_should_wake, sid)
                 if not pending["count"] and not attempt:
@@ -1082,8 +1113,11 @@ class Pool:
         row = await asyncio.to_thread(store.session_get, sid)
         if not row or row["status"] != "working":
             return
-        jobs = await asyncio.to_thread(store.jobs_of, sid, "running")
-        if jobs:
+        # Anything that will wake it, not only a job. Counted as idle with a watch armed, it
+        # lost its hold on the checkout and could be ended with the watch still polling.
+        worker = self.live.get(sid)
+        waiting = await worker._outstanding() if worker else {"jobs": await asyncio.to_thread(store.jobs_of, sid, "running")}
+        if any(waiting.values()):
             await asyncio.to_thread(store.session_set, sid, status="waiting")
         else:
             await asyncio.to_thread(store.session_set, sid, status="idle")
@@ -1158,11 +1192,13 @@ class Pool:
                 known = await asyncio.to_thread(store.thread_get, thread)
                 if known and known["kind"] == "topic":
                     await asyncio.to_thread(store.thread_stop, thread)
-        # What the owner said that it never read still needs someone to read it. Anything
-        # else stays on its thread: handed to the Router, a CI failure could start the very
-        # work they just stopped.
-        unread = await asyncio.to_thread(store.inbox_pending, sid)
-        await asyncio.to_thread(store.inbox_withdraw, sid, [i["id"] for i in unread])
+        await self._pass_on_unread(sid)
+
+    async def _pass_on_unread(self, sid: str):
+        """What the owner said that an ended session never read still needs someone to read
+        it. Anything else stays on its thread: handed to the Router, a CI failure could start
+        the very work they just stopped."""
+        unread = await asyncio.to_thread(store.inbox_claim_unread, sid)
         for item in unread:
             if item["kind"] != "trigger" or not item["ref"]:
                 continue
@@ -1234,10 +1270,14 @@ class Pool:
         because a loop of restarts is the one thing recovery must not cause."""
         lost = await asyncio.to_thread(store.recover)
         for job in lost["lost_jobs"]:
+            # Kept for when it is answered, as a finished job is: a Worker with a question
+            # open for the owner was otherwise run again by every restart.
+            holder = await asyncio.to_thread(store.session_get, job["session"]) or {}
             await asyncio.to_thread(
                 store.inbox_put, job["session"], "job",
                 f"Background job {job['id']} ({job['tool']}: {job['label']}) was lost in a restart, and its "
-                "result with it. It may have finished: check the real state before running it again.", ref=job["id"])
+                "result with it. It may have finished: check the real state before running it again.", ref=job["id"],
+                wakes=holder.get("status") not in ("blocked", "failed"))
         await self.orch.intake.recover()
         await asyncio.to_thread(self._finished_means_finished)
         if self.orch.paused:

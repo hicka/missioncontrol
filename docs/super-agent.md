@@ -86,14 +86,19 @@ a failed delivery and the tunnel's address changes when it restarts.
 ## Reaching the owner
 
 - `Orchestrator.deliver` is the one way out. Everything lands in the app. A phone channel
-  gets it through the outbox: written first, removed once a channel has taken it, retried by
+  gets it through the outbox: written first, marked sent once a channel has taken it, retried by
   the Watchdog for six hours, and a push goes out if the channel failed. Channels mostly
-  report failure by returning False, which counts as failure.
+  report failure by returning False, which counts as failure. A message still on its first
+  send is left alone by the retry, since a slow channel often delivers after all.
 - `reply` takes a channel name or a conversation id, and anything else is an error. The
   Router's prompt lists where the owner can be reached.
 - A report goes to wherever the owner last spoke, not where the task started.
 - A held command, or a job waiting to start, is said to the owner in code, with a push if
-  that did not already reach their phone. The Router gets a line saying they have been told.
+  that did not already reach their phone. Where the code that held it can say why (it reaches
+  the network, it touches a file where keys live, it changes something outside this Mac), the
+  notice says so. The Router gets a line saying they have been told.
+- A report read in the same batch as the owner's message is still news for them: answering
+  the message does not leave what is said of the report with nobody to hear it.
 - A Worker's question stays on the session until answered: on the Router's board, in
   `/tasks` and in the Inbox, where it can be answered directly.
 - Words the Router writes with nobody waiting are handed back once, because it believes it
@@ -116,6 +121,11 @@ done: it becomes `blocked`, asking the owner whether it should carry on, with wh
 The Router sees the finish line in each report and its count on the board. Direct lines,
 scheduled runs, work done ahead of time and work from outside events have none.
 
+`progress` is not an ending either: it says what comes next. A Worker that stops after one is
+reminded once to carry on, and if it stops again it becomes `blocked`, asking whether it
+should. Each report the Router reads says when it was written and whether the same Worker
+has reported since, and the board is shown again whenever the owner writes.
+
 `waiting` is not an ending: the Worker stays where it is, with its authority, whatever it adds
 afterwards. It is only true of something that will wake it (a job, a watch, a held approval, an
 event on a thread that can still bring news), and it is told at once when nothing will. If it
@@ -125,7 +135,9 @@ A Worker that is asked and will not say keeps waiting if nothing has happened si
 and the Router hears about it once, or again if the owner has spoken since. The first waiting report after the owner speaks wakes the
 Router, since it may be their answer; the rest do not. A PR closing ends the following of it.
 If the Watchdog has told a Worker twice and it is still stuck on nothing, it becomes `blocked`,
-with a question for the owner, rather than sitting on its authority for ever.
+with a question for the owner, rather than sitting on its authority for ever. A held command
+counts as something to wait for during its first day; after that the Worker is told not to
+count on it. Time the machine spent asleep does not count towards being hung.
 
 A scheduled run ends with any final report, so the next firing starts its own Worker. One
 that is blocked waits for its answer without holding up the job.
@@ -259,10 +271,17 @@ checkout count as someone's, so a Worker that finds them gets a copy rather than
   not in any system prompt, for that reason: each batch starts with the time. Cached input is
   counted apart, and counts for a tenth in the daily budget.
 - A cut in a tool result says so. `job` and `recall` take an offset to read the rest.
+- Once a day the Watchdog deletes what nothing reads any more: messages sent over a week ago,
+  mail taken and transcript rows compacted away over a month ago, and tool-call records over
+  two months old. Events are kept, because telling a new one from a repeat rests on them.
 
 ## When a provider refuses
 
-Being down is retried, with a stalled Worker said to the owner once. Refusing is about what
+Being down is retried, with a stalled Worker said to the owner once. Being down includes a
+provider that accepts a request and then says mid-stream that it is too busy, a reply that
+stops arriving before it ends, and an error page served as success. A reply that never comes
+is waited out twice, not four times. A tool call that arrives garbled is refused in words and
+kept in a shape the provider will take back, so one bad call cannot end its task. Refusing is about what
 is in the transcript, so retrying gets the same answer for ever. The Router first strips
 thinking blocks, which belong to the model that wrote them. Then it sets the batch aside and
 tells the owner what it could not read. Then it drops the history, keeping the digest. From
@@ -284,5 +303,7 @@ nothing is thrown away, and it waits and says so once, as for an outage.
   - `sources`, `ignore_actors`, `reply_caps`.
 - The outside watchdog, once: `packaging/macos/install-watchdog`. It leaves a service you
   booted out alone, and when restarts stop helping it tells you on your phone and on this Mac.
+  Inside the app, the loops that keep it going (watches, the Watchdog, scheduled jobs, the
+  heartbeat, the GitHub monitor, modules) are started again, with a growing wait, if one ends.
   `bin/mc-watchdog --once` answers in its exit code: 0 all is well, 1 it is not answering and a
   restart may help, 2 it is answering but something is wrong that a restart would not fix.

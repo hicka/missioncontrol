@@ -4,6 +4,7 @@ Skills are instructions, never executable plugins. All effects still go through
 the same validated tool dispatcher and the agent's configured permissions.
 """
 import asyncio
+import difflib
 import json
 import logging
 import re
@@ -11,6 +12,7 @@ import time
 
 from jsonschema import Draft202012Validator
 
+import llm as llm_mod
 import runtime_store as store
 import settings
 import skills
@@ -221,10 +223,18 @@ class Harness:
         status, result, content = "failed", "tool did not finish", None
         try:
             validator = self.validators.get(name)
+            if isinstance(args, dict) and llm_mod.UNPARSED in args:
+                raise ValueError(f"the arguments of that {name} call were not valid JSON, most likely cut off or "
+                                 "badly escaped, so nothing ran. Send the call again with its arguments as one "
+                                 "JSON object. If the content is long, write it to a file in smaller pieces.")
             if validator is None:
                 if name in RETIRED_TOOLS:
                     raise ValueError(f"{name} no longer exists: use report, which reaches the Router")
-                raise ValueError(f"unknown tool {name}")
+                # Say what there is. "unknown tool" alone had a model guess a second name.
+                have = sorted(n for n in self.validators if self.permits(aid, n))
+                near = difflib.get_close_matches(name, have, n=3, cutoff=0.5)
+                raise ValueError(f"unknown tool {name}. " + (f"Did you mean {', '.join(near)}? " if near else "")
+                                 + f"Your tools are: {', '.join(have)}")
             error = next(validator.iter_errors(args), None)
             if error:
                 path = ".".join(map(str, error.absolute_path)) or "arguments"

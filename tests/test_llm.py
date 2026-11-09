@@ -354,3 +354,81 @@ def test_a_thinking_model_gets_room_to_answer_after_it_thinks(monkeypatch):
     assert resolved(provider="ollama", model="llama") == 3000
     # a larger limit the owner set is kept
     assert resolved(provider="minimax", model="MiniMax-M3.1-Flash", max_tokens=32000) == 32000
+
+
+def _stream(monkeypatch, events, wire="anthropic"):
+    monkeypatch.setattr(llm, "_transport", httpx.MockTransport(
+        lambda req: httpx.Response(200, content=_sse(events), headers={"content-type": "text/event-stream"})))
+    return asyncio.run(llm._post_stream("https://x/v1/messages", {"stream": True}, {}, wire, None))
+
+
+def test_a_stream_that_stops_without_ending_is_not_taken_as_a_whole_reply(monkeypatch):
+    # A proxy closing the body early left half a sentence as the answer.
+    cut = [{"type": "message_start", "message": {"model": "m", "usage": {}}},
+           {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+           {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "The deploy is"}}]
+    with pytest.raises(RuntimeError, match="connection failed"):
+        _stream(monkeypatch, cut)
+
+
+def test_a_tool_call_whose_arguments_never_finished_arriving_does_not_run_with_none(monkeypatch):
+    cut = [{"type": "message_start", "message": {"model": "m", "usage": {}}},
+           {"type": "content_block_start", "index": 0,
+            "content_block": {"type": "tool_use", "id": "t1", "name": "terminal", "input": {}}},
+           {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"cmd'}},
+           {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {}},
+           {"type": "message_stop"}]
+    with pytest.raises(RuntimeError, match="connection failed"):
+        _stream(monkeypatch, cut)
+
+
+@pytest.mark.parametrize("wire,event", [
+    ("anthropic", {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}),
+    ("openai", {"error": {"type": "server_error", "message": "The server had an error"}}),
+])
+def test_being_too_busy_mid_stream_is_being_down_not_refusing(monkeypatch, wire, event):
+    # It went down the path for a bad request: no retry, no fallback, a failed task.
+    with pytest.raises(RuntimeError) as caught:
+        _stream(monkeypatch, [event], wire)
+    assert any(t in str(caught.value) for t in llm._RETRYABLE) and not llm.refused(caught.value)
+
+
+def test_a_stream_error_about_the_request_itself_is_still_not_retried(monkeypatch):
+    with pytest.raises(RuntimeError) as caught:
+        _stream(monkeypatch, [{"type": "error", "error": {"type": "invalid_request_error", "message": "bad tool"}}])
+    assert not any(t in str(caught.value) for t in llm._RETRYABLE)
+
+
+def test_a_reply_that_never_comes_is_waited_out_twice_not_four_times(monkeypatch):
+    hits = []
+
+    def handler(request):
+        hits.append(1)
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    async def no_sleep(_):
+        return None
+    monkeypatch.setattr(llm, "_transport", httpx.MockTransport(handler))
+    monkeypatch.setattr(llm.asyncio, "sleep", no_sleep)
+    with pytest.raises(RuntimeError, match="connection failed"):
+        asyncio.run(llm._post("https://x/v1/messages", {"max_tokens": 10}, {}))
+    assert len(hits) == 2
+
+
+def test_an_error_page_served_as_success_is_an_outage(monkeypatch):
+    monkeypatch.setattr(llm, "_transport", httpx.MockTransport(lambda req: httpx.Response(200, text="<html>Bad gateway")))
+    with pytest.raises(RuntimeError, match="connection failed"):
+        asyncio.run(llm._post("https://x/v1/messages", {"max_tokens": 10}, {}))
+
+
+def test_a_garbled_tool_call_is_kept_in_a_shape_the_provider_will_take_back():
+    # Stored as it came, a string where the arguments go was refused by the provider on
+    # every later call, which ended the task for good.
+    resp = {"content": [{"type": "tool_use", "id": "a", "name": "terminal", "input": '{"command": "ls'},
+                        {"type": "tool_use", "id": "b", "name": "run it!", "input": {"x": 1}},
+                        {"type": "tool_use", "id": "c", "name": None, "input": None}]}
+    uses = llm.tool_uses(resp)
+    assert uses[0]["input"] == {llm.UNPARSED: '{"command": "ls'}
+    assert uses[1]["name"] == llm.INVALID_TOOL and uses[2]["name"] == llm.INVALID_TOOL
+    assert all(isinstance(u["input"], dict) for u in uses)
+    assert resp["content"][0]["input"] == uses[0]["input"]   # the stored block is the same one

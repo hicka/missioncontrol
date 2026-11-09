@@ -1,4 +1,6 @@
 """Shared settings.yaml + .env access for all subsystems."""
+import copy
+import os
 import re
 import threading
 from pathlib import Path
@@ -9,30 +11,58 @@ from apphome import ROOT
 
 SETTINGS_PATH = ROOT / "settings.yaml"
 ENV_PATH = ROOT / ".env"
-_lock = threading.Lock()
+_lock = threading.RLock()
+
+
+def write_whole(path: Path, text: str):
+    """Replace a file in one step. A plain write empties it first, and whoever reads in
+    that instant sees nothing: for settings that meant every default, and a caller that
+    then saved what it had read would have written the defaults over the real file."""
+    path = path.resolve() if path.is_symlink() else path     # a link stays a link
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        # Private from its first byte: these files hold keys.
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as out:
+            out.write(text)
+        os.chmod(tmp, (path.stat().st_mode & 0o777) if path.exists() else 0o644)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+_parsed: tuple | None = None   # (path, mtime_ns, size, data)
 
 
 def load() -> dict:
-    if SETTINGS_PATH.exists():
+    """Parsed once per change to the file. It is read dozens of times a second (every
+    service asks whether it is enabled), and each used to be a full YAML parse on the
+    event loop. Callers change what they get, so each gets its own copy."""
+    global _parsed
+    try:
+        stat = SETTINGS_PATH.stat()
+    except OSError:
+        return {}
+    key = (str(SETTINGS_PATH), stat.st_mtime_ns, stat.st_size)
+    if _parsed is None or _parsed[:3] != key:
         data = yaml.safe_load(SETTINGS_PATH.read_text()) or {}
-        if isinstance(data, dict):
-            return data
-    return {}
+        _parsed = (*key, data if isinstance(data, dict) else {})
+    return copy.deepcopy(_parsed[3])
 
 
 def save(settings: dict):
     with _lock:
-        SETTINGS_PATH.write_text(
-            yaml.safe_dump(settings, sort_keys=False, allow_unicode=True))
+        write_whole(SETTINGS_PATH, yaml.safe_dump(settings, sort_keys=False, allow_unicode=True))
 
 
 def update(section: str, values: dict) -> dict:
     """Merge values into one top-level section and persist. Returns settings."""
-    s = load()
-    cur = s.get(section) or {}
-    cur.update(values)
-    s[section] = cur
-    save(s)
+    # Read and written under one lock, or two updates at once keep only the later one.
+    with _lock:
+        s = load()
+        cur = s.get(section) or {}
+        cur.update(values)
+        s[section] = cur
+        save(s)
     return s
 
 

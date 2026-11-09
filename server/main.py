@@ -283,9 +283,11 @@ async def _github_poll_loop():
             for repo, error in github.poll_trouble():
                 await orch.router.notify_owner(f"I have not been able to read {repo} on GitHub for half an hour, so I "
                                                f"may be missing events from it: {error[:120]}")
+            pause = github.settings()["poll_seconds"]
         except Exception:
             logger.exception("github poll failed")
-        await asyncio.sleep(github.settings()["poll_seconds"])
+            pause = 300
+        await asyncio.sleep(pause)
 
 
 def configure_runtime():
@@ -303,6 +305,8 @@ def configure_runtime():
         await orch.close()
         orch.reset_states()
 
+    # The loops below come back by themselves if one ever ends. They used to stay down
+    # until someone noticed: no watches polled, no jobs fired, no GitHub events read.
     manager.add("agents", "Agent engine", "The Router, its Workers, their inboxes and tool execution.",
                 start=orch.start, stop=stop_agents, settings_tab="llm")
     manager.add("skill_learning", "Skill learning", "Extracts reusable procedures from completed work.",
@@ -310,10 +314,10 @@ def configure_runtime():
     manager.add("browser", "Agent browser", "On-demand browser sessions and their Chromium processes.",
                 stop=browser._reset, dependencies=("agents",), group="harness", settings_tab="browser")
     manager.add("watcher", "Watch engine", "Bounded status polls, deadlines and resolution notifications.",
-                run=lambda: watch_mod.watch_loop(orch, broadcast), dependencies=("agents",))
+                run=lambda: watch_mod.watch_loop(orch, broadcast), auto_restart=True, dependencies=("agents",))
     manager.add("watchdog", "Watchdog", "Checks every session is really getting somewhere, restarts or nudges "
                 "what is not, and retries what failed from outside.",
-                run=lambda: orch.watchdog.loop(), dependencies=("agents",))
+                run=lambda: orch.watchdog.loop(), auto_restart=True, dependencies=("agents",))
     manager.add("evolution", "Self-improvement", "Learns lessons from your corrections and repeated failures, "
                 "trials them, and keeps only what measurably helps.",
                 run=lambda: evolve.loop(orch), default=evolve.enabled, dependencies=("agents",),
@@ -332,15 +336,15 @@ def configure_runtime():
     modules_mod.orch, modules_mod.emit = orch, broadcast
     manager.add("modules", "Modules", "Add-ons the agents built: runs each in its own sandboxed process, "
                 "with the tools and desktop cards it adds.",
-                run=modules_mod.supervise, dependencies=("agents",), group="harness")
+                run=modules_mod.supervise, auto_restart=True, dependencies=("agents",), group="harness")
     manager.add("scheduler", "Scheduled jobs", "Runs owner-approved jobs and monitor checks.",
-                run=lambda: cron_mod.scheduler(orch, broadcast), dependencies=("agents",), settings_tab="jobs")
+                run=lambda: cron_mod.scheduler(orch, broadcast), auto_restart=True, dependencies=("agents",), settings_tab="jobs")
     manager.add("heartbeat", "Heartbeat", "Periodic checks against your heartbeat checklist.",
-                run=lambda: cron_mod.heartbeat_loop(orch), dependencies=("agents",),
+                run=lambda: cron_mod.heartbeat_loop(orch), auto_restart=True, dependencies=("agents",),
                 default=lambda: cron_mod.heartbeat_settings()["enabled"], settings_tab="channels",
                 configure=lambda enabled: cfg.update("heartbeat", {"enabled": enabled}))
     manager.add("brief", "Daily brief", "Delivers your configured daily digest.",
-                run=lambda: cron_mod.brief_loop(orch), dependencies=("agents",),
+                run=lambda: cron_mod.brief_loop(orch), auto_restart=True, dependencies=("agents",),
                 default=lambda: cron_mod.brief_settings()["enabled"], settings_tab="channels",
                 configure=lambda enabled: cfg.update("brief", {"enabled": enabled}))
     manager.add("laya", "Laya decisions", "Self-hosted, Jev-compatible decision model: free typed "
@@ -375,7 +379,7 @@ def configure_runtime():
                 health=lambda: "Tunnel exited; restart to reconnect." if tunnel.proc and tunnel.proc.returncode is not None else "",
                 dependencies=("public_listener",), group="network", settings_tab="github")
     manager.add("github_poll", "GitHub monitor", "Periodic repository and CI updates.",
-                run=_github_poll_loop, default=lambda: github.settings()["enabled"],
+                run=_github_poll_loop, auto_restart=True, default=lambda: github.settings()["enabled"],
                 dependencies=("agents",), group="network", settings_tab="github")
     manager.add("fleet_listener", "Fleet listener", "Key-authenticated connections from your other machines.",
                 run=_serve_fleet, default=lambda: bool(sync_mod.sync_key()),
