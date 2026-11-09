@@ -1909,7 +1909,16 @@ class Orchestrator:
         # reflection saw six attempts and could not tell which one was the answer.
         if getattr(out, "status", "completed") != "completed" and len(ctx.trail) > before:
             ctx.trail[before] += "  -> FAILED: " + " ".join(str(out).split())[:90]
+        if name in ("terminal", "claude_code"):
+            self.files_may_have_changed(ctx)
         return out
+
+    def files_may_have_changed(self, session):
+        """A Worker ran something that can change files. Looked at in the background, so
+        the step it just finished is not kept waiting on git."""
+        if getattr(session, "kind", "") == "worker" and hasattr(session, "row"):
+            import awareness
+            self._spawn_background(awareness.after_change(self, session), "agents", session.profile)
 
     async def _dispatch_tool(self, aid, agent_cwd, name, args) -> str:
         ctx = self._ctx(aid)

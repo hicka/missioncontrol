@@ -268,6 +268,32 @@ pointed at the copy, because skills and prompts name that path. A folder with no
 folder is the work. A copy is deleted when its task ends, unless it holds unpushed work, which is kept for 30 days. Uncommitted changes in the
 checkout count as someone's, so a Worker that finds them gets a copy rather than working on top.
 
+## Several tasks at once
+
+A profile is a role, not a seat: each dispatch is its own session, with its own transcript and,
+where it needs a repository someone else has, its own copy. So someone in the middle of one task
+takes another without dropping the first, and the Router is told to hand new work to whoever
+suits it rather than whoever is free.
+
+What that isolation hides, `server/awareness.py` shows. Every Worker opens with the other tasks
+under way: who has each, where, on which branch, and the files it has changed so far, and reads
+them again each time it wakes. After a step that can change files, its working copy is compared
+with the others'. Two tasks that have changed the same file are each told once, at their next
+step and without being woken, and the Router is told too, since their results have to be merged
+one after the other. The Router's board lists what each task is changing. Starting the same
+profile on what reads as a task it already has is refused once, with `separate` to say it really
+is different work. None of this is enforced: it is what a colleague would know from sitting in
+the same room.
+
+File names are whatever the author of a pull request called them, so wherever one is shown it is
+quoted and cut short, and for work an outside event started only their number is given. Such work
+is itself told who is working where and on which files, and not what the others were asked for.
+A finished task whose pull request is still open stays on the list until it closes.
+
+A task's course can be changed while it runs. The owner's message reaches its Worker at its next
+step, through the Router's `attach` or straight from the task's card
+(`POST /api/kernel/sessions/{id}/message`), and outranks whatever the Worker had planned.
+
 ## Memory and cost
 
 - A transcript is compacted by what it holds in text and tool output. Thinking signatures and

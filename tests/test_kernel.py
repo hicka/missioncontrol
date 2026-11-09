@@ -227,9 +227,11 @@ def test_workers_of_one_profile_run_at_once_with_separate_sessions(isolated, mon
         await until(lambda: len(model.worker_calls) >= 3)
         rows = store.sessions(None, "worker")
         assert len({r["id"] for r in rows}) == 3 and all(r["profile"] == aid for r in rows)
-        # Each has its own transcript: no task's brief shows up in another's context.
+        # Each has its own transcript, with one task of its own. The others it knows of
+        # only as lines under what else is under way.
         briefs = [flat(c["messages"][0]) for c in model.worker_calls[:3]]
-        assert sum("task 0" in b for b in briefs) == 1
+        assert sum("session: task 0" in b for b in briefs) == 1
+        assert any("ALSO UNDER WAY" in b and "task 0" in b.split("ALSO UNDER WAY")[1] for b in briefs)
         release.set()
         await wind_down(o)
     asyncio.run(main())

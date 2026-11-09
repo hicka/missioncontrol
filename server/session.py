@@ -811,5 +811,7 @@ class Session:
         await asyncio.to_thread(store.inbox_put, self.id, "job",
                                 f"Background job {job['id']} ({job['tool']}: {job['label']}) {status}:\n{head}",
                                 ref=job["id"], wakes=not held)
+        if job["tool"] in ("terminal", "claude_code") and hasattr(self.orch, "files_may_have_changed"):
+            self.orch.files_may_have_changed(self)
         if not held:
             self.orch.wake_session(self.id)

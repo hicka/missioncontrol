@@ -439,6 +439,18 @@ final class Store {
     }
 
     func work(in thread: String) -> [WorkRef] { workRefs.filter { $0.thread == thread } }
+
+    /// The owner's word to one task while it runs, past the lead.
+    func steer(_ session: String, _ text: String) async -> Bool {
+        do {
+            _ = try await api?.post("/api/kernel/sessions/\(API.escape(session))/message", ["text": text])
+            workSoon(after: 0.2)
+            return true
+        } catch {
+            notify(error.localizedDescription, error: true)
+            return false
+        }
+    }
     /// Moves whenever a card in this conversation gains a step or changes what it says.
     func workSize(in thread: String) -> Int {
         workRefs.filter { $0.thread == thread }.compactMap { workModels[$0.id]?.task }

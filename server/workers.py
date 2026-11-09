@@ -12,6 +12,7 @@ import logging
 import os
 import time
 
+import awareness
 import db
 import harness
 import kernel_store as store
@@ -126,6 +127,9 @@ WORKER_PROTOCOL = (
     "- You never speak to a person. Your final words and report go to the Router, which handles every reply. "
     "Any instruction above about message_agent or message_user predates this: use report instead. If this needs "
     "another specialist, report handback saying what is needed.\n"
+    "- The owner can change your course while you work. A message from them that arrives mid-task outranks your "
+    "plan: read it at once, drop what no longer fits, and carry on from what they said. Other tasks run beside "
+    "yours; ALSO UNDER WAY lists them and the files they are changing.\n"
     "- A slow command moves to the background by itself and you get told when it ends, so you can do something "
     "else meanwhile, or end your turn: you will be woken. New messages about this task can reach you at any step. "
     "Read them, and adjust if the direction changed.\n"
@@ -230,6 +234,7 @@ class Worker(sess.Session):
         self.nudged_report = False
         self.nudged_progress = False
         self.rules_told = None
+        self.board_told = ""
         self.heard_owner = False
         self.stretches = 0
         self.trail_unasked = False
@@ -338,6 +343,14 @@ class Worker(sess.Session):
         self.state_told = time.time()
         await self.orch.refresh_current_state()
         text = self.orch._current_state_text
+        # The other tasks as they stand now: one may have started, or moved into its files.
+        row = await asyncio.to_thread(store.session_get, self.id) or self.row
+        others = await asyncio.to_thread(awareness.board, self.orch, self.id, not awareness.outside(row)) \
+            if awareness.reads_board(row) else ""
+        # Said again only when it has changed since this Worker last read it.
+        if others and others != self.board_told:
+            text += "\n\n" + others
+        self.board_told = others
         # The rules are said again only when they have changed since this Worker last had
         # them: one added while it waited is one it has never read.
         rules = await asyncio.to_thread(self._rules)
@@ -948,6 +961,13 @@ class Pool:
         # events are still unhandled, and handling them again starts one Worker, not two.
         await self.orch.refresh_current_state()
         opening = await asyncio.to_thread(self.orch._work_context, profile, " ".join([title, brief]))
+        # Who else is on what, and which files they have changed, before it picks its own.
+        # A pulse or work done ahead of time has nothing to collide with. Work an outside
+        # event started is told where the others are, and not what they were asked for.
+        others = "" if speculative or one_shot or direct else await asyncio.to_thread(
+            awareness.board, self.orch, "", strength != "inferred")
+        if others:
+            opening = f"{others}\n\n{opening}"
         cards = "\n\n".join(recall.card(t, 8000) for t in triggers)
         lines = [f"TASK {mission or 'for this session'}: {title}"]
         if brief and brief != title:
@@ -1156,6 +1176,7 @@ class Pool:
         if (row.get("meta") or {}).get("copies"):
             import runtime
             runtime.spawn(asyncio.to_thread(workspace.release, row), "agents", f"Remove copy: {sid}")
+        awareness.forget(sid)
         if worker:
             self.live.pop(sid, None)
             self.orch.harness.unbind(sid)

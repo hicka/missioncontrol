@@ -94,6 +94,9 @@ struct WorkCard: View {
     @State private var opened: Bool?
     @State private var allSteps = false
     @State private var hovering = false
+    @State private var steer = ""
+    @State private var steered: String?
+    @State private var sending = false
 
     private static let shown = 4
 
@@ -212,6 +215,47 @@ struct WorkCard: View {
         .padding(.top, visible.isEmpty && task.phase != "thinking" ? 0 : 10)
     }
 
+    /// A word to whoever has the task, while it runs. It reads it at its next step.
+    @ViewBuilder private func steering(_ task: WorkTask) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Rectangle().fill(MC.line.opacity(0.5)).frame(height: 0.5)
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.turn.down.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
+                TextField("", text: $steer, prompt: Text(task.phase == "needs_you" ? "Answer \(task.agentName)" : "Tell \(task.agentName) to change course").foregroundColor(.secondary.opacity(0.7)))
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12.5))
+                    .onSubmit { send(task) }
+                    .disabled(sending)
+                    .accessibilityLabel("Message for \(task.agentName) about this task")
+                if sending { Spinner(size: 10) }
+                else if !steer.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Button { send(task) } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 16)) }
+                        .buttonStyle(.plain).foregroundStyle(Color.accentColor).accessibilityLabel("Send")
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                }
+            }
+            if let steered {
+                Text(verbatim: "Sent. \(task.agentName) reads it at its next step: “\(clip(steered, 70))”")
+                    .font(.system(size: 11)).foregroundStyle(.tertiary)
+                    .transition(.opacity)
+            }
+        }
+        .padding(.top, 10)
+        .animation(.easeInOut(duration: 0.2), value: steered)
+        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: steer.isEmpty)
+    }
+
+    private func send(_ task: WorkTask) {
+        let text = steer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !sending else { return }
+        sending = true
+        Task {
+            let ok = await store.steer(task.session, text)
+            sending = false
+            if ok { steered = text; steer = "" }
+        }
+    }
+
     @ViewBuilder private func foot(_ task: WorkTask) -> some View {
         if task.phase == "needs_you" {
             VStack(alignment: .leading, spacing: 8) {
@@ -237,6 +281,7 @@ struct WorkCard: View {
             .padding(.top, 10)
             .animation(.easeInOut(duration: 0.3), value: task.checksDone)
         }
+        if task.live { steering(task) }
     }
 }
 
