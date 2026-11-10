@@ -117,7 +117,7 @@ const Work = (() => {
     if (st === "thinking") return "thinking";
     if (st === "doing") return "working";
     if (has("waiting", "queued")) return "waiting";
-    if ((cheered[aid] || 0) > now() || s.flash?.[aid]) return "happy";
+    if ((cheered[aid] || 0) > now()) return "happy";   // a task finished, not merely a reply
     if ((failed[aid] || 0) > now()) return "sad";
     return "idle";
   }

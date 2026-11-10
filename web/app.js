@@ -212,8 +212,8 @@ function renderSidebar() {
     .map((t) => {
       const busy = t.agent ? Work.busy(t.agent) : false;
       const doing = busy ? Work.doing(t.agent) : "";
-      const mark = S.unread[t.id] ? '<span class="unread-dot" aria-label="Unread"></span>'
-        : busy ? `<i class="work-spin" style="--now:${presenceClock()}" aria-label="Working"></i>` : "";
+      // Busy shows in the presence itself, so only unread needs a mark of its own.
+      const mark = S.unread[t.id] ? '<span class="unread-dot" aria-label="Unread"></span>' : "";
       return `<button class="convo ${inChat && S.current === t.id ? "selected" : ""}" data-id="${esc(t.id)}">
         <span class="convo-face">${threadAvatar(t, 22)}</span>
         <span class="convo-body">

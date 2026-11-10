@@ -287,7 +287,7 @@
     return `<button class="team-chip${busy ? " busy" : ""}" data-act="chat" data-agent="${h(a.id)}" title="Opens the chat with ${h(a.name)}">
       ${presence(a, 26, moodOf(a.id))}
       <span class="tc-text"><span class="name">${h(a.name)}</span>${doing ? `<span class="doing shimmer" style="--now:${presenceClock()}">${h(doing)}</span>` : ""}</span>
-      ${busy ? `<i class="work-spin" style="--now:${presenceClock()}"></i>` : ""}</button>`;
+      </button>`;
   }
   function toolDetail(e) {
     const args = (e.detail || {}).arguments;
