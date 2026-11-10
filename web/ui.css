@@ -1101,3 +1101,118 @@ pre.out.cmd { margin: 2px 0 0; max-height: 132px; color: var(--text); }
   .work-card.moving { border-color: color-mix(in srgb, var(--tint) 45%, transparent); }
 }
 @media (hover: none) { .work-stop { opacity: 1; } }
+
+/* ---------- modules ---------- */
+.mod-row { padding: 16px 18px; margin-bottom: 12px; display: grid; gap: 10px; }
+.mod-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mod-head h4 { font-size: 14.5px; font-weight: 600; }
+.mod-head .muted { font-size: 12px; }
+.mod-row > p { font-size: 13px; color: var(--text-2); }
+.mod-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.mod-chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 99px; font-size: 12px;
+  background: var(--surface-2); color: var(--text-2); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mod-chip .i { width: 13px; height: 13px; flex: none; }
+.mod-chip.warn { background: var(--warn-soft); color: var(--warn); }
+.mod-reason, .held-reason { font-size: 12.5px; color: var(--warn); }
+.held-reason { display: flex; gap: 6px; align-items: flex-start; margin-top: 6px; }
+.held-reason .i { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+pre.out.bad { color: var(--danger); }
+.mod-tools { display: grid; gap: 4px; font-size: 12.5px; }
+.mod-tools > div:not(.muted) { display: flex; gap: 10px; align-items: baseline; }
+.mod-tools span { color: var(--text-3); }
+.mod-strip { display: flex; gap: 12px; overflow-x: auto; padding: 2px 2px 8px; align-items: flex-start; }
+.mod-row .item-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.mod-row .item-actions .spacer { flex: 1; }
+.mod-card { --tone: var(--line-strong); flex: none; width: 320px; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--tone) 55%, var(--line));
+  background: var(--surface); padding: 12px 14px; display: grid; gap: 10px; }
+.mod-card.size-small { width: 236px; }
+.mod-card.size-large { width: 440px; }
+.mod-card.resting { opacity: .72; }
+.mod-card header { display: flex; align-items: center; gap: 8px; }
+.mod-card header > div { flex: 1; min-width: 0; display: grid; }
+.mod-card header strong { font-size: 13px; font-weight: 600; }
+.mod-card header small, .mod-card footer { font-size: 11.5px; color: var(--text-3); }
+.mod-card header .i { width: 16px; height: 16px; color: var(--tone); }
+.mod-card footer { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.mod-card footer label { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; white-space: nowrap; }
+.mod-card.tone-good, .tone-good { --tone: var(--good); } .mod-card.tone-warn, .tone-warn { --tone: var(--warn); }
+.tone-danger { --tone: var(--danger); } .tone-info { --tone: var(--info); } .tone-muted { --tone: var(--text-3); } .tone-accent { --tone: var(--text); }
+.mc-stack { display: flex; flex-direction: column; min-width: 0; }
+.mc-stack.h { flex-direction: row; align-items: center; flex-wrap: wrap; }
+.mc-stack.v.align-center { align-items: center; text-align: center; } .mc-stack.v.align-trailing { align-items: flex-end; text-align: right; }
+.mc-stack.h.align-center { justify-content: center; } .mc-stack.h.align-trailing { justify-content: flex-end; }
+.mc-grid { display: grid; }
+.mc-spacer { flex: 1; }
+.mc-divider { border: 0; border-top: 1px solid var(--line); width: 100%; }
+.mc-text { font-size: 13px; color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
+.mc-text.title { font-size: 20px; font-weight: 600; letter-spacing: -.01em; } .mc-text.headline { font-weight: 600; }
+.mc-text.caption, .mc-text.footnote { font-size: 11.5px; color: var(--text-3); } .mc-text.mono { font-family: var(--mono); font-size: 12px; }
+.mc-text[class*="tone-"], .mc-stat[class*="tone-"] .value, .mc-symbol[class*="tone-"] { color: var(--tone); }
+.mc-stat { display: grid; gap: 1px; min-width: 0; }
+.mc-stat .label, .mc-stat .detail { font-size: 11.5px; color: var(--text-3); }
+.mc-stat .value { font-size: 22px; font-weight: 600; letter-spacing: -.02em; line-height: 1.15; }
+.mc-stat .value small { font-size: 12px; font-weight: 500; color: var(--text-3); margin-left: 3px; }
+.mc-stat .trend { font-style: normal; font-size: 13px; margin-left: 5px; color: var(--text-3); }
+.mc-status { display: flex; align-items: center; gap: 7px; font-size: 13px; }
+.mc-status i { width: 8px; height: 8px; border-radius: 50%; background: var(--tone, var(--text-4)); flex: none; }
+.mc-status small { color: var(--text-3); font-size: 12px; }
+.mc-badge { display: inline-flex; align-self: flex-start; height: 20px; align-items: center; padding: 0 8px; border-radius: 99px; font-size: 11.5px; font-weight: 500;
+  background: color-mix(in srgb, var(--tone, var(--text-3)) 16%, transparent); color: var(--tone, var(--text-2)); }
+.mc-progress { display: grid; gap: 4px; font-size: 12px; color: var(--text-3); }
+.mc-progress div { height: 5px; border-radius: 5px; background: var(--surface-3); overflow: hidden; }
+.mc-progress i { display: block; height: 100%; border-radius: 5px; background: var(--tone, var(--info)); }
+.mc-chart { display: grid; gap: 4px; margin: 0; } .mc-chart figcaption { font-size: 11.5px; color: var(--text-3); }
+.mc-chart svg { width: 100%; height: 46px; }
+.mc-chart.line path { fill: none; stroke: var(--tone, var(--info)); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.mc-chart.bar rect { fill: var(--tone, var(--info)); }
+.mc-symbol .i { width: var(--z); height: var(--z); }
+.mc-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.mc-table th { text-align: left; font-weight: 500; color: var(--text-3); padding: 3px 6px 3px 0; border-bottom: 1px solid var(--line); }
+.mc-table td { padding: 4px 6px 4px 0; border-bottom: 1px solid var(--line); color: var(--text-2); overflow-wrap: anywhere; }
+.mc-link { color: var(--info); font-size: 13px; text-decoration: underline; text-underline-offset: 2px; }
+.mc-field { width: 100%; }
+.mc-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
+.mod-log { font-family: var(--mono); font-size: 12px; display: grid; gap: 3px; }
+.log-line { display: flex; gap: 10px; } .log-line time { color: var(--text-4); flex: none; }
+.log-line span { white-space: pre-wrap; overflow-wrap: anywhere; } .log-line.warn span { color: var(--warn); } .log-line.error span { color: var(--danger); }
+pre.patch span { display: block; min-height: 1.4em; }
+pre.patch .add { color: var(--good); background: var(--good-soft); }
+pre.patch .del { color: var(--danger); background: var(--danger-soft); }
+pre.patch .meta { color: var(--text-3); }
+
+/* ---------- a held command in the chat ---------- */
+.held-card { max-width: 620px; border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line)); background: var(--surface); border-radius: 14px;
+  padding: 12px 14px; display: grid; gap: 10px; }
+.held-card.loading { color: var(--text-3); font-size: 12.5px; border-color: var(--line); }
+.held-card.answered { border-color: var(--line); background: color-mix(in srgb, var(--text) 3%, transparent); padding: 6px 10px; }
+.held-head { display: flex; gap: 9px; align-items: flex-start; }
+.held-head .i { color: var(--warn); margin-top: 2px; flex: none; }
+.held-head strong { display: block; font-size: 13.5px; font-weight: 600; }
+.held-head small { font-size: 12px; color: var(--text-3); }
+/* Wrapped, never scrolled sideways: a line running off the edge would be part of the
+   command that is approved without being seen. */
+pre.out.cmd.whole { white-space: pre-wrap; overflow-wrap: anywhere; max-height: none; }
+.held-card .appr-actions { margin-top: 0; }
+.held-card .link { justify-self: start; font-size: 12.5px; color: var(--text-2); text-decoration: underline; }
+.held-prior { font-size: 12.5px; color: var(--text-2); }
+.held-prior pre { margin-top: 4px; }
+.held-line { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; font-size: 12.5px; min-width: 0; color: var(--text-2); }
+.held-line strong { font-weight: 600; color: var(--text); flex: none; }
+.held-line code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.held-line .i { width: 14px; height: 14px; flex: none; } .held-line .i.good { color: var(--good); } .held-line .i.bad { color: var(--danger); }
+.held-line .when { color: var(--text-4); font-size: 11.5px; flex: none; }
+.held-line[aria-expanded="true"] .tool-chevron { transform: rotate(90deg); }
+
+/* ---------- suggestions above a composer ---------- */
+.composer-options { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 20; max-height: 280px; overflow-y: auto; padding: 5px;
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: var(--shadow-pop); text-align: left; }
+.composer-option { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 9px; border-radius: 9px; text-align: left; min-width: 0; }
+.composer-option.selected, .composer-option:hover { background: var(--select); }
+.composer-option .i { width: 15px; height: 15px; color: var(--text-3); flex: none; }
+.composer-option strong { font-size: 13px; font-weight: 500; white-space: nowrap; }
+.composer-option small { font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.set-card.list { padding: 0; overflow: hidden; }
+.set-card.list .item + .item { border-top: 1px solid var(--line); }
+.pane-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; padding: 2px 0; }
+#pane-runtime .kstats { margin-bottom: 14px; }
+.mc-stack.h > .mc-field { flex: 1; width: auto; min-width: 90px; }

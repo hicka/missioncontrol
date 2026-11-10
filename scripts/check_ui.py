@@ -18,7 +18,7 @@ base = args.url.rstrip('/')
 out = Path(__file__).resolve().parents[1] / 'build' / 'review'
 out.mkdir(parents=True, exist_ok=True)
 VIEWS = {'home': 'Home', 'inbox': 'Inbox', 'missions': 'Tasks', 'activity': 'Activity', 'schedule': 'Schedule',
-         'knowledge': 'Knowledge', 'evolution': 'Evolution'}
+         'knowledge': 'Knowledge', 'evolution': 'Evolution', 'modules': 'Modules'}
 
 with sync_playwright() as p:
     browser = p.chromium.launch()

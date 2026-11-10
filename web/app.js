@@ -312,6 +312,95 @@ function eventHtml(m) {
   </details>`;
 }
 
+/* ---------- a held command, in the chat ----------
+   Waiting, it shows who wants to run what, where, what it would touch, and the whole
+   command before the button that runs it. Answered, it folds to one line. */
+const APPR = { rows: {}, ui: {}, asked: {} };
+const APPR_PREVIEW = 6;
+const QUIET_PROGRAMS = new Set("cd echo printf export set true false sleep test [ cat grep egrep head tail sed awk tr sort uniq wc cut xargs tee mkdir ls pwd jq rm env time nohup".split(" "));
+function commandEffects(command) {
+  const hosts = [...new Set([...command.matchAll(/https?:\/\/([A-Za-z0-9.-]+)/g)].map((m) => m[1]))];
+  const deletes = [], programs = [];
+  for (const part of command.split(/[;|&\n()]+/)) {
+    const words = part.trim().split(/\s+/).filter(Boolean);
+    while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) words.shift();
+    if (!words.length) continue;
+    const prog = words[0].split("/").pop();
+    if (prog === "rm") deletes.push(...words.slice(1).filter((w) => !w.startsWith("-")));
+    else if (!QUIET_PROGRAMS.has(prog) && /^[\w.+-]+$/.test(prog) && !programs.includes(prog)) programs.push(prog);
+  }
+  return { hosts, deletes, programs: programs.slice(0, 3) };
+}
+async function loadApproval(id) {
+  APPR.asked[id] = true;
+  try {
+    const d = await (await fetch(`/api/approvals/${encodeURIComponent(id)}`)).json();
+    APPR.rows[id] = d.ok && d.approval ? d.approval : false;
+  } catch { APPR.rows[id] = false; }
+  if (S.atLatest || S.anchorId != null) renderMessages("stay");
+}
+// null: nothing is known of it, so the notice is shown as the plain message it is.
+function approvalCardHtml(id) {
+  const a = APPR.rows[id];
+  if (a === false) return null;
+  if (!a) { if (!APPR.asked[id]) loadApproval(id); return `<div class="held-card loading">Held command…</div>`; }
+  const ui = APPR.ui[id] || (APPR.ui[id] = {});
+  const tool = a.kind === "mcp";
+  const who = S.agents[a.agent]?.name || a.agent;
+  const command = String(a.command || "");
+  const when = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (a.status === "pending") {
+    const lines = command.split("\n");
+    const whole = lines.length <= APPR_PREVIEW || ui.all;
+    const fx = tool ? null : commandEffects(command);
+    const chips = fx ? [...fx.deletes.map((d) => `<span class="mod-chip warn">deletes ${esc(d)}</span>`),
+      ...fx.hosts.map((x) => `<span class="mod-chip">${esc(x)}</span>`), ...fx.programs.map((x) => `<span class="mod-chip">${esc(x)}</span>`)].join("") : "";
+    const context = [a.task, a.cwd ? `in ${String(a.cwd).replace(/^\/(Users|home)\/[^/]+/, "~")}` : ""].filter(Boolean).join(" · ");
+    const p = a.prior;
+    const verb = p && (p.status === "denied" ? "declined" : "approved");
+    const prior = !p ? "" : p.identical ? `<div class="held-reason"><span>The same command you ${verb} at ${esc(when(p.ts))}.</span></div>`
+      : `<div class="held-prior">Close to one you ${verb} at ${esc(when(p.ts))}. What changed:<pre class="patch">${(p.diff || []).map((l) =>
+          `<span class="${l[0] === "+" ? "add" : "del"}">${esc(l)}</span>`).join("\n") || "only spacing"}</pre></div>`;
+    return `<div class="held-card" data-approval="${esc(id)}">
+      <div class="held-head"><svg class="i"><use href="#i-shield"/></svg><div><strong>${esc(who)} wants to ${tool ? "call a tool" : "run a command"}</strong>
+        ${context ? `<small>${esc(context)}</small>` : ""}</div></div>
+      ${chips ? `<div class="mod-chips">${chips}</div>` : ""}
+      <pre class="out cmd whole">${esc(whole ? command : lines.slice(0, APPR_PREVIEW).join("\n"))}</pre>
+      ${whole ? "" : `<button class="link" data-appr="all">Show all ${lines.length} lines</button>`}
+      ${a.reason ? `<div class="held-reason"><svg class="i"><use href="#i-shield"/></svg><span>Held because ${esc(a.reason)}</span></div>` : ""}${prior}
+      <div class="appr-actions"><button class="btn small" data-appr="deny">Decline</button>
+        <button class="btn small primary" data-appr="${whole ? "approve" : "all"}">${whole ? (tool ? "Approve" : "Run it") : "Review"}</button></div></div>`;
+  }
+  const result = String(a.result || "");
+  const exit = result.match(/^exit (-?\d+)\n?/);
+  const output = exit ? result.slice(exit[0].length) : result;
+  const title = a.status === "denied" ? "Declined" : a.status === "approved" ? "Approved, running"
+    : exit && exit[1] !== "0" ? `Ran, exit ${exit[1]}` : "Ran";
+  const bad = a.status === "denied" || (exit && exit[1] !== "0");
+  return `<div class="held-card answered" data-approval="${esc(id)}">
+    <button class="held-line" data-appr="out" aria-expanded="${!!ui.out}">
+      ${a.status === "approved" ? `<i class="work-spin" style="--now:${presenceClock()}"></i>` : `<svg class="i ${bad ? "bad" : "good"}"><use href="#i-${a.status === "denied" ? "x" : bad ? "alert" : "check"}"/></svg>`}
+      <strong>${title}</strong><code>${esc(command.split("\n")[0].slice(0, 90))}</code><span class="when">${esc(when(a.updated || a.ts))}</span>
+      <span class="tool-chevron">&#8250;</span></button>
+    ${ui.out ? `<pre class="out cmd whole">${esc(command)}</pre>${output.trim() ? `<pre class="out">${esc(output)}</pre>` : ""}` : ""}</div>`;
+}
+function wireApprovalCards(root) {
+  root.querySelectorAll("[data-appr]").forEach((b) => b.addEventListener("click", async () => {
+    const id = b.closest("[data-approval]").dataset.approval;
+    const ui = APPR.ui[id] || (APPR.ui[id] = {});
+    const act = b.dataset.appr;
+    if (act === "all") { ui.all = true; renderMessages("stay"); return; }
+    if (act === "out") { ui.out = !ui.out; renderMessages("stay"); return; }
+    b.closest(".held-card").querySelectorAll("button").forEach((x) => { x.disabled = true; });
+    try {
+      const res = await fetch(`/api/approvals/${encodeURIComponent(id)}/${act}`, { method: "POST" });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || d.ok === false) throw new Error(d.error || "That did not work. Please try again.");
+    } catch (err) { window.MissionDeck?.notify(err.message, true); }
+    loadApproval(id);
+  }));
+}
+
 function headFor(sender, ts, state = "idle") {
   const agent = S.agents[sender];
   const name = agent ? agent.name : sender;
@@ -435,6 +524,11 @@ function renderMessages(keep) {
       }
     }
     const head = !out && newGroup ? headFor(m.sender, m.ts) : "";
+    if (m.meta?.approval && approvalCardHtml(m.meta.approval) !== null) {
+      // A held command is decided where it was asked for, shown in full first.
+      html += `<div class="row in ${newGroup ? "first-of-group" : ""}" data-mid="${m.id}">${head}${approvalCardHtml(m.meta.approval)}</div>`;
+      prev = m; continue;
+    }
     html += `<div class="row ${out ? "out" : "in"} ${newGroup ? "first-of-group" : ""}" data-mid="${m.id}"
       ${out ? `title="${esc(fmtTime(m.ts))}"` : ""}>${head}<div class="bubble">${attHtml}${fmt(m.text)}</div></div>`;
     prev = m;
@@ -454,10 +548,11 @@ function renderMessages(keep) {
         const tail = draft.thinking.length > 600 ? "…" + draft.thinking.slice(-600) : draft.thinking;
         html += `<div class="row in streaming thought first-of-group">${headFor(aid, 0, S.agentState[aid] || "thinking")}<div class="bubble">${esc(tail)}</div></div>`;
       } else {
+        const tool = S.agentTool[aid];
         html += `<div class="row in typing first-of-group">${headFor(aid, 0, S.agentState[aid] || "thinking")}<div class="bubble">
-          <span class="dot"></span><span class="dot"></span><span class="dot"></span></div></div>`;
+          ${tool ? `<span class="shimmer" style="--now:${presenceClock()}">Running ${esc(tool.replaceAll("_", " "))}</span>`
+                 : `<span class="dot"></span><span class="dot"></span><span class="dot"></span>`}</div></div>`;
       }
-      break;
     }
   }
   if (S.hasMore) {
@@ -482,6 +577,7 @@ function renderMessages(keep) {
       await pollPendingJobs();
       renderMessages();
     }));
+  wireApprovalCards(el);
   el.querySelectorAll("details.event-line").forEach((d) =>
     d.addEventListener("toggle", () => { S.eventsOpen[d.dataset.key] = d.open; }));
   el.querySelectorAll(".tool-summary").forEach((b) =>
@@ -896,6 +992,7 @@ function onEvent(ev) {
     S.user = ev.user; updateProfile();
   } else if (ev.type === "approvals_updated") {
     Work.soon();
+    for (const id of Object.keys(APPR.rows)) if (APPR.rows[id]) loadApproval(id);
     renderJobsPane();
   } else if (ev.type === "cron_updated") {
     Work.soon();
@@ -1024,6 +1121,73 @@ async function send() {
   }
 }
 
+/* ---------- suggestions ----------
+   Commands or profiles to choose from, above the composer so nothing else moves:
+   "/" at the start of the message, "@" anywhere in it. */
+const SUGGEST = { commands: null };
+function attachSuggest(input, box) {
+  let options = [], index = 0, token = null;
+  const close = () => { options = []; box.classList.add("hidden"); box.innerHTML = ""; };
+  function find() {
+    const upto = input.value.slice(0, input.selectionStart);
+    const at = upto.match(/(^|\s)@([\w-]*)$/);
+    if (at) return { kind: "@", query: at[2].toLowerCase(), start: upto.length - at[2].length - 1 };
+    const slash = upto.match(/^\/([\w-]*)$/);
+    if (slash) return { kind: "/", query: slash[1].toLowerCase(), start: 0 };
+    return null;
+  }
+  function draw() {
+    box.classList.toggle("hidden", !options.length);
+    box.innerHTML = options.map((o, i) => `<button type="button" class="composer-option${i === index ? " selected" : ""}" role="option" aria-selected="${i === index}" data-i="${i}">
+      ${o.agent ? presence(o.agent, 18, "idle", true) : `<svg class="i"><use href="#i-term"/></svg>`}<strong>${esc(o.label)}</strong><small>${esc(o.detail || "")}</small></button>`).join("");
+    box.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
+  }
+  async function update() {
+    token = find();
+    if (!token) { close(); return; }
+    if (token.kind === "/") {
+      if (!SUGGEST.commands) {
+        try { SUGGEST.commands = (await (await fetch("/api/commands")).json()).commands || []; } catch { SUGGEST.commands = []; }
+        token = find();
+        if (!token || token.kind !== "/") { close(); return; }
+      }
+      options = SUGGEST.commands.filter((c) => c.name.startsWith(token.query)).slice(0, 8)
+        .map((c) => ({ label: c.usage || `/${c.name}`, detail: c.description, insert: `/${c.name} ` }));
+    } else {
+      options = Object.values(S.agents).sort((a, b) => (a.order ?? 99) - (b.order ?? 99))
+        .filter((a) => a.id.startsWith(token.query) || a.name.toLowerCase().includes(token.query)).slice(0, 8)
+        .map((a) => ({ label: a.name, detail: `@${a.id}`, insert: `@${a.id} `, agent: a }));
+    }
+    index = Math.min(index, Math.max(0, options.length - 1));
+    draw();
+  }
+  function accept(o) {
+    const caret = input.selectionStart;
+    input.value = input.value.slice(0, token.start) + o.insert + input.value.slice(caret);
+    const at = token.start + o.insert.length;
+    input.setSelectionRange(at, at);
+    close();
+    input.dispatchEvent(new Event("input"));
+    input.focus();
+  }
+  input.addEventListener("input", () => { index = 0; update(); });
+  input.addEventListener("click", update);
+  input.addEventListener("blur", () => setTimeout(close, 150));
+  input.addEventListener("keydown", (e) => {
+    if (!options.length) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault(); e.stopImmediatePropagation();
+      index = (index + (e.key === "ArrowDown" ? 1 : -1) + options.length) % options.length; draw();
+    } else if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+      e.preventDefault(); e.stopImmediatePropagation(); accept(options[index]);
+    } else if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); close(); }
+  });
+  box.addEventListener("mousedown", (e) => {
+    const b = e.target.closest("[data-i]");
+    if (b) { e.preventDefault(); accept(options[Number(b.dataset.i)]); }
+  });
+}
+
 /* ---------- init ---------- */
 async function init() {
   const res = await fetch("/api/state");
@@ -1103,6 +1267,7 @@ async function init() {
     if (e.key === "Escape") closeModal();
   });
   const input = $("#input");
+  attachSuggest(input, $("#composer-options"));
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
@@ -1127,6 +1292,8 @@ async function init() {
   if (location.hash === "#new") openModal();
   const first = [...S.threads].sort((a, b) => (b.last?.ts || 0) - (a.last?.ts || 0))[0];
   if (first) await openThread(first.id);
+  // A proposal card needs the proposals read before it can say where one stands.
+  renderImprovements().then(() => renderMessages("stay")).catch(() => {});
   window.MissionDeck?.show("home");
   window.dispatchEvent(new Event("mc:ready"));
 }
@@ -1198,6 +1365,7 @@ function switchTab(name) {
   if (name === "browser") window.BrowserPanel?.refresh();
   if (name === "improve") renderImprovements();
   if (name === "apple") renderApple();
+  MorePanes.open(name);
   document.querySelectorAll(".set-tab").forEach((t) =>
     t.classList.toggle("active", t.dataset.tab === name));
   document.querySelectorAll(".set-pane").forEach((p) =>

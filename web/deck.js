@@ -6,15 +6,19 @@
   const icon = (name, cls = "") => `<svg class="i ${cls}"><use href="#i-${name}"/></svg>`;
   const VIEWS = {
     home: "Home", inbox: "Inbox", missions: "Tasks", activity: "Activity", schedule: "Schedule",
-    knowledge: "Knowledge", evolution: "Evolution",
+    knowledge: "Knowledge", evolution: "Evolution", modules: "Modules",
   };
+  const VIEW_ICONS = { home: "home", inbox: "inbox", missions: "tasks", activity: "bolt", schedule: "clock", knowledge: "book",
+                       evolution: "growth", modules: "puzzle" };
+  const kept = (key, fallback) => { try { return localStorage.getItem(key) || fallback; } catch { return fallback; } };
+  const keep = (key, value) => { try { localStorage.setItem(key, value); } catch {} };
   const D = {
     view: "home", loaded: false, sending: false, refreshing: false, again: false,
     data: { agents: {}, missions: [], executions: [], watches: [], skills: [], activity: [],
             counts: {}, inbox: [], evolution: {}, jobs: [] },
-    commands: [], evo: null, evoFilter: "live", taskFilter: "active", knowTab: "memory",
+    commands: [], evo: null, evoFilter: "live", taskFilter: kept("mc-task-filter", "active"), knowTab: "memory",
     memQuery: "", memSeq: 0, showTable: false, panelAgent: null, paletteIndex: 0,
-    kernel: null, eventFilter: "all", kernelTimer: null,
+    kernel: null, eventFilter: kept("mc-event-filter", "all"), kernelTimer: null, answers: {}, paletteHits: null, paletteSeq: 0,
   };
   let refreshTimer, panelTimer, restoreFocus;
   const now = () => Date.now() / 1000;
@@ -160,12 +164,13 @@
   function mount() {
     const c = $("#deck-content");
     const frames = { home: homeFrame, inbox: inboxFrame, missions: tasksFrame, activity: activityFrame, schedule: scheduleFrame,
-                     knowledge: knowledgeFrame, evolution: evolutionFrame };
+                     knowledge: knowledgeFrame, evolution: evolutionFrame, modules: MissionModules.frame };
     c.innerHTML = frames[D.view]();
     if (D.view === "home") wireComposer();
     if (D.view === "evolution") loadEvolution();
     if (D.view === "knowledge") loadKnowledge();
     if (D.view === "activity") loadKernel();
+    if (D.view === "modules") { MissionModules.update(); MissionModules.load(); }
     update();
   }
   function update() {
@@ -322,6 +327,7 @@
   }
   function wireComposer() {
     const input = $("#home-input");
+    attachSuggest(input, $("#home-options"));
     input.addEventListener("input", () => {
       input.style.height = "auto";
       input.style.height = `${Math.min(220, input.scrollHeight)}px`;
@@ -375,7 +381,9 @@
     signin: { icon: "globe", tone: "warn", label: "Website sign-in" },
     lesson: { icon: "flask", tone: "warn", label: "Lesson needs a decision" },
     question: { icon: "inbox", tone: "warn", label: "A worker needs your answer" },
+    module: { icon: "puzzle", tone: "info", label: "A module wants to run" },
   };
+  const reasonHtml = (i) => (i.reason ? `<div class="held-reason">${icon("shield")}<span>Held because ${h(i.reason)}</span></div>` : "");
   // Three near-identical held commands are impossible to tell apart, so say
   // which one was already answered and what moved since.
   function priorHtml(prior) {
@@ -391,11 +399,11 @@
     const who = i.agent && i.agent !== "*" ? agentName(i.agent) : (i.kind === "lesson" ? "Everywhere" : "");
     let sub = "", actions = "";
     if (i.kind === "command") {
-      sub = `<span class="who">${h(who)}</span> wants to run this in ${h(i.detail)}. Running it runs exactly what is shown.${priorHtml(i.prior)}`;
+      sub = `<span class="who">${h(who)}</span> wants to run this in ${h(i.detail)}. Running it runs exactly what is shown.${reasonHtml(i)}${priorHtml(i.prior)}`;
       actions = `<button class="btn small primary" data-act="approval" data-id="${h(i.id)}" data-do="approve">Run it</button>
         <button class="btn small" data-act="approval" data-id="${h(i.id)}" data-do="deny">Decline</button>`;
     } else if (i.kind === "tool") {
-      sub = `<span class="who">${h(who)}</span> wants to make this change through the ${h(i.detail)} MCP server, which marks it as one that cannot be taken back. Approving sends exactly what is shown.`;
+      sub = `<span class="who">${h(who)}</span> wants to make this change through the ${h(i.detail)} MCP server, which marks it as one that cannot be taken back. Approving sends exactly what is shown.${reasonHtml(i)}`;
       actions = `<button class="btn small primary" data-act="approval" data-id="${h(i.id)}" data-do="approve">Approve</button>
         <button class="btn small" data-act="approval" data-id="${h(i.id)}" data-do="deny">Decline</button>`;
     } else if (i.kind === "job") {
@@ -412,8 +420,10 @@
         <button class="btn small" data-act="proposal" data-id="${h(i.id)}" data-do="reject">Reject</button>`;
     } else if (i.kind === "question") {
       sub = `<span class="who">${h(who)}</span> stopped on this while working on: ${h(i.detail)}
-        <textarea class="answer-box" id="answer-${h(i.id)}" rows="2" style="margin-top:8px" placeholder="Your answer goes straight to this worker."></textarea>`;
+        <textarea class="answer-box" id="answer-${h(i.id)}" rows="2" style="margin-top:8px" data-answer="${h(i.id)}" placeholder="Your answer goes straight to this worker.">${h(D.answers[i.id] || "")}</textarea>`;
       actions = `<button class="btn small primary" data-act="answer" data-id="${h(i.id)}">Send</button>`;
+    } else if (i.kind === "module") {
+      ({ sub, actions } = MissionModules.inboxItem(i, who));
     } else if (i.kind === "signin") {
       sub = `<span class="who">${h(who)}</span> is waiting. ${h(i.detail)}`;
       actions = `<button class="btn small primary" data-act="settings" data-tab="browser">Open sign-in</button>`;
@@ -442,6 +452,12 @@
   }
   function updateInbox() {
     const items = D.data.inbox || [];
+    // A refresh must not take a half-written answer away: the words are kept, and the
+    // list is left alone while someone is typing in it and nothing new has arrived.
+    const ids = items.map((i) => `${i.kind}:${i.id}`).join(",");
+    const box = $("#inbox-list");
+    if (box.dataset.ids === ids && box.contains(document.activeElement) && document.activeElement.matches("textarea")) return;
+    box.dataset.ids = ids;
     $("#inbox-list").innerHTML = items.length ? `<div class="list card">${items.map(inboxItem).join("")}</div>`
       : `<div class="card"><div class="empty">${teamFaces()}<strong>Nothing needs you</strong>
           <span>When the agent needs your say-so, it lands here and on your phone.</span></div></div>`;
@@ -1069,10 +1085,18 @@
       finally { b.disabled = false; }
     });
   }
+  // A patch as it reads: what is added, what goes, and the lines that only say where.
+  function patchHtml(diff) {
+    if (!diff) return `<pre>(empty)</pre>`;
+    return `<pre class="patch">${String(diff).split("\n").map((line) => {
+      const cls = /^(\+\+\+|---|@@|diff |index )/.test(line) ? "meta" : line[0] === "+" ? "add" : line[0] === "-" ? "del" : "";
+      return `<span class="${cls}">${h(line) || " "}</span>`;
+    }).join("\n")}</pre>`;
+  }
   async function showDiff(id) {
     try {
       const d = await api(`/api/improvements/${id}/diff`);
-      inspect(d.title || "Proposed change", `<pre>${h(d.diff || "(empty)")}</pre>`);
+      inspect(d.title || "Proposed change", patchHtml(d.diff));
     } catch (err) { notify(err.message, true); }
   }
 
@@ -1087,7 +1111,7 @@
   function paletteItems() {
     const q = $("#palette-search").value.toLowerCase().trim();
     const out = [];
-    const views = Object.entries(VIEWS).map(([id, title]) => ({ group: "Go to", title, icon: { home: "home", inbox: "inbox", missions: "tasks", schedule: "clock", knowledge: "book", evolution: "growth" }[id], run: () => show(id) }));
+    const views = Object.entries(VIEWS).map(([id, title]) => ({ group: "Go to", title, icon: VIEW_ICONS[id], run: () => show(id) }));
     const agents = Object.values(S.agents).sort((a, b) => (a.order ?? 99) - (b.order ?? 99)).map((a) => ({
       group: "Profiles", title: a.name, sub: a.blurb, face: a, run: () => openThread(`dm:${a.id}`) }));
     agents.unshift({ group: "Profiles", title: "Group chat", sub: "The agent, or any profile you @mention", icon: "users", run: () => openThread("group:team") });
@@ -1095,6 +1119,14 @@
       run: () => ["help", "status", "agents", "watches"].includes(c.name) ? runCommand(`/${c.name}`) : prefill(`/${c.name} `) }));
     for (const item of [...views, ...agents, ...ACTIONS.map((a) => ({ ...a, group: "Actions" })), ...commands]) {
       if (!q || `${item.title} ${item.sub || ""}`.toLowerCase().includes(q)) out.push(item);
+    }
+    // What was said, found by the server: choosing one opens the chat at that message.
+    for (const m of (q && D.paletteHits) || []) {
+      const thread = threadOfHit(m);
+      if (!thread) continue;
+      const t = S.threads.find((x) => x.id === thread);
+      const who = m.sender === "user" ? "You" : agentName(m.sender);
+      out.push({ group: "Messages", title: clip(m.text, 90), sub: `${who} · ${t.name} · ${sidebarTime(m.ts)}`, icon: "chat", run: () => openThread(thread, m.id) });
     }
     return out;
   }
@@ -1111,7 +1143,7 @@
   }
   function openPalette(query = "") {
     restoreFocus = document.activeElement;
-    D.paletteIndex = 0;
+    D.paletteIndex = 0; D.paletteHits = null;
     $("#command-palette").classList.remove("hidden");
     $("#palette-search").value = query;
     renderPalette();
@@ -1176,8 +1208,8 @@
       case "skill": inspectSkill(d.slug); break;
       case "run-skill": inspectSkill(d.slug, true); break;
       case "diff": showDiff(d.id); break;
-      case "task-filter": D.taskFilter = d.filter; updateTasks(); break;
-      case "event-filter": D.eventFilter = d.filter; updateActivity(); break;
+      case "task-filter": D.taskFilter = d.filter; keep("mc-task-filter", d.filter); updateTasks(); break;
+      case "event-filter": D.eventFilter = d.filter; keep("mc-event-filter", d.filter); updateActivity(); break;
       case "worker": await inspectWorker(d.id); break;
       case "recall": {
         const out = await api(`/api/kernel/recall/${encodeURIComponent(d.id)}`);
@@ -1198,7 +1230,7 @@
         const text = (box?.value || "").trim();
         if (!text) break;
         b.disabled = true;
-        try { await api(`/api/kernel/sessions/${encodeURIComponent(d.id)}/message`, { text }); notify("Sent."); refresh(); }
+        try { await api(`/api/kernel/sessions/${encodeURIComponent(d.id)}/message`, { text }); delete D.answers[d.id]; notify("Sent."); refresh(); }
         catch (err) { notify(err.message, true); b.disabled = false; }
         break;
       }
@@ -1326,7 +1358,23 @@
   $("#inspector-close").addEventListener("click", closeInspector);
   $("#command-palette").addEventListener("click", (e) => { if (e.target.id === "command-palette") closePalette(); });
   $("#execution-inspector").addEventListener("click", (e) => { if (e.target.id === "execution-inspector") closeInspector(); });
-  $("#palette-search").addEventListener("input", () => { D.paletteIndex = 0; renderPalette(); });
+  let paletteTimer;
+  $("#palette-search").addEventListener("input", () => {
+    D.paletteIndex = 0; renderPalette();
+    const q = $("#palette-search").value.trim();
+    clearTimeout(paletteTimer);
+    if (q.length < 2) { D.paletteHits = null; return; }
+    paletteTimer = setTimeout(async () => {
+      const seq = ++D.paletteSeq;
+      try {
+        const data = await api(`/api/search?q=${encodeURIComponent(q)}`);
+        if (seq !== D.paletteSeq) return;
+        D.paletteHits = (data.results || []).slice(0, 12);
+      } catch { D.paletteHits = null; }
+      if (!$("#command-palette").classList.contains("hidden")) renderPalette();
+    }, 180);
+  });
+  document.addEventListener("input", (e) => { if (e.target.dataset?.answer) D.answers[e.target.dataset.answer] = e.target.value; });
   $("#palette-search").addEventListener("keydown", (e) => {
     const n = paletteItems().length;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -1412,6 +1460,13 @@
   $("#palette-btn").title = `Search and commands (${mac ? "⌘K" : "Ctrl K"})`;
 
   applyTheme();
-  window.MissionDeck = { show, showChat, notify, refresh };
+  // A module that failed or waits for approval opens More by itself and marks its row.
+  function modulesChanged(needs) {
+    D.moreNeeds = needs;
+    const mark = $("#nav-module-count");
+    mark.textContent = needs; mark.classList.toggle("hidden", !needs);
+    applyMore();
+  }
+  window.MissionDeck = { show, showChat, notify, refresh, api, inspect, prefill, modulesChanged };
   show("home");
 })();
