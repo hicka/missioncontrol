@@ -157,6 +157,9 @@ def main():
     def open_app(icon, item):
         _spawn_app([])
 
+    def open_bar(icon, item):
+        _spawn_app(["--bar"])
+
     def restart_app(icon, item):
         threading.Thread(target=_restart_server, daemon=True).start()
 
@@ -179,6 +182,7 @@ def main():
             *agent_items(),
             Menu.SEPARATOR,
             MenuItem("Open Mission Control", open_app, default=True),
+            MenuItem("Show floating bar", open_bar),
             MenuItem("Restart Mission Control", restart_app),
             MenuItem("Quit Mission Control", quit_all),
         )),

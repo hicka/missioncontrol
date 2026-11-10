@@ -8,6 +8,9 @@ One binary, three modes:
               webhooks). Spawned detached so it outlives the window.
   --tray      the status bar item: shows team state, can reopen the
               window, restart Mission Control, or quit everything.
+  --bar       the floating bar: a small window above the others that says
+              what the agent is doing and takes a quick question. Off unless
+              `desktop.floating_bar` is set, or it is opened from the tray.
 """
 import os
 import socket
@@ -102,8 +105,81 @@ def tray_running() -> bool:
         return False
 
 
+def bar_enabled() -> bool:
+    try:
+        import settings as _cfg
+        return bool((_cfg.load().get("desktop") or {}).get("floating_bar"))
+    except Exception:
+        return False
+
+
+def _pid_running(name: str) -> bool:
+    from apphome import ROOT
+    try:
+        from processes import pid_alive
+        return pid_alive(int((ROOT / name).read_text().strip()))
+    except Exception:
+        return False
+
+
+BAR_SIZE = (680, 60)
+
+
+def run_bar():
+    """A frameless window that stays on top, showing web/bar.html. It only ever talks
+    to a server that is already up: it starts nothing and stops nothing."""
+    from apphome import ROOT
+    if _pid_running("bar.pid"):
+        return
+    if not wait_ready(timeout=20.0):
+        print("the floating bar found no server to show", file=sys.stderr)
+        return
+    pidfile = ROOT / "bar.pid"
+    pidfile.write_text(str(os.getpid()))
+    import webview
+    width, height = BAR_SIZE
+    x = y = None
+    try:
+        # Bottom centre of the main screen, clear of the taskbar.
+        screen = webview.screens[0]
+        x, y = int(screen.x + (screen.width - width) / 2), int(screen.y + screen.height - height - 96)
+    except Exception:
+        pass
+
+    class Bridge:
+        """What the page may ask of its window. Nothing here reaches past the window."""
+        def resize(self, wanted):
+            tall = max(height, min(640, int(wanted)))
+            window.resize(width, tall)
+            if y is not None:
+                # It grows upwards: the row the pointer is on stays where it is.
+                window.move(x, y - (tall - height))
+
+        def open_main(self):
+            spawn([])
+
+        def close(self):
+            window.destroy()
+
+    window = webview.create_window("Mission Control Bar", f"{URL}/bar", width=width, height=height, x=x, y=y,
+                                   frameless=True, easy_drag=False, on_top=True, resizable=False,
+                                   js_api=Bridge())
+    try:
+        webview.start()
+    finally:
+        try:
+            pidfile.unlink()
+        except Exception:
+            pass
+
+
 def main():
     _ensure_streams()
+    if "--bar" in sys.argv:
+        # Before the macOS hand-off below: the bar is its own small window on every
+        # platform, and never launches or replaces the native app.
+        run_bar()
+        return
     if sys.platform == "darwin" and "--server" not in sys.argv:
         launch_native()
         return
@@ -123,6 +199,8 @@ def main():
         sys.exit(1)
     if not tray_running():
         spawn(["--tray"])
+    if bar_enabled() and not _pid_running("bar.pid"):
+        spawn(["--bar"])
 
     import webview
     # let attachment chips save files and image links open in the browser

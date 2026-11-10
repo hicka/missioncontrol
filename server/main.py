@@ -492,6 +492,32 @@ async def index():
     return FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
+@app.get("/bar")
+async def bar_page():
+    """The floating bar: a compact page the desktop app keeps above other windows."""
+    return FileResponse(WEB_DIR / "bar.html", headers={"Cache-Control": "no-cache"})
+
+
+class DesktopBody(BaseModel):
+    floating_bar: bool
+
+
+def _desktop_settings() -> dict:
+    return {"floating_bar": bool((cfg.load().get("desktop") or {}).get("floating_bar"))}
+
+
+@app.get("/api/desktop")
+async def desktop_get():
+    """What the desktop app opens beside its window. The bar is off unless asked for."""
+    return _desktop_settings()
+
+
+@app.put("/api/desktop")
+async def desktop_put(body: DesktopBody):
+    cfg.update("desktop", {"floating_bar": body.floating_bar})
+    return {"ok": True, **_desktop_settings()}
+
+
 class _FreshStatic(StaticFiles):
     """The index page is already served no-cache so the app window picks up UI
     changes on its next open; the scripts and styles it pulls in have to

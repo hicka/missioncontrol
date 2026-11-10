@@ -145,5 +145,19 @@ const MorePanes = (() => {
     } catch (err) { say(err.message, true); b.disabled = false; }
   });
 
-  return { open(name) { ({ profiles, updates, mail, runtime })[name]?.(); } };
+  /* ---------- the floating bar ---------- */
+  async function desktop() {
+    const box = document.getElementById("desktop-bar");
+    try { box.checked = !!(await call("/api/desktop")).floating_bar; } catch {}
+  }
+  document.getElementById("desktop-bar").addEventListener("change", async (e) => {
+    try {
+      await call("/api/desktop", { floating_bar: e.target.checked }, "PUT");
+      document.getElementById("desktop-status").textContent = e.target.checked ? "It opens the next time the desktop app starts." : "Off.";
+    } catch (err) { say(err.message, true); e.target.checked = !e.target.checked; }
+  });
+  document.getElementById("desktop-bar-open").addEventListener("click", () =>
+    window.open("/bar", "mc-bar", `popup,width=680,height=60,left=${Math.round((screen.availWidth - 680) / 2)},top=${screen.availHeight - 160}`));
+
+  return { desktop, open(name) { ({ profiles, updates, mail, runtime })[name]?.(); } };
 })();

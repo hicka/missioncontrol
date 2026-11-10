@@ -171,6 +171,12 @@ published it will keep itself up to date from them. Its data stays in your user 
 of master are always at [Latest build](https://github.com/hicka/missioncontrol/releases/tag/latest-build),
 from the [build workflow](.github/workflows/build.yml).
 
+The Windows app shows the same interface a browser gets, in its own window with a tray
+icon: live work cards in the chat, modules, the inbox and every setting. It has a
+floating bar too, a small window above the others that says what the agent is doing and
+takes a quick question. The bar is off until you turn it on under Settings > General, or
+open it from the tray menu. It has no global shortcut and no voice.
+
 **Docker.** See the [`Dockerfile`](Dockerfile) and
 [`docker-compose.example.yml`](docker-compose.example.yml). Set your own `MC_API_TOKEN`.
 The browser is left out unless you build with `--build-arg WITH_BROWSER=1`.

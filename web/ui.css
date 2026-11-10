@@ -512,12 +512,6 @@ pre.out { background: var(--surface-2); border: 1px solid var(--line); border-ra
   color: var(--text-2); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; }
 .progress { height: 4px; border-radius: 4px; background: var(--surface-3); overflow: hidden; margin-top: 8px; }
 .progress span { display: block; height: 100%; background: var(--text-2); border-radius: 4px; transition: width .4s var(--ease); }
-.growth-card { padding: 18px; display: flex; flex-direction: column; gap: 14px; }
-.growth-card .big { font-size: 34px; font-weight: 600; letter-spacing: -.025em; line-height: 1; }
-.growth-card .big small { font-size: 13px; color: var(--text-3); font-weight: 500; margin-left: 6px; letter-spacing: 0; }
-.growth-card .latest { font-size: 12.5px; color: var(--text-2); border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 8px; }
-.growth-card .latest div { display: flex; gap: 8px; align-items: flex-start; }
-.growth-card .latest .i { width: 15px; height: 15px; margin-top: 2px; color: var(--text-3); }
 .skill-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
 .skill-card { padding: 16px; display: flex; flex-direction: column; gap: 8px; }
 .skill-card h4 { font-size: 14px; font-weight: 600; }
@@ -952,14 +946,12 @@ table.usage td { padding: 4px 6px; color: var(--text-2); font-variant-numeric: t
 .interstitial .when { color: var(--text-4); margin-left: 2px; }
 .row.in.a2a { margin-top: 4px; }
 pre.out.cmd { margin: 2px 0 0; max-height: 132px; color: var(--text); }
-.growth-pair .big { font-size: 28px; margin-top: 4px; }
 .item-meta .icon-btn.danger { color: var(--text-4); }
 .item-meta .icon-btn.danger:hover { color: var(--danger); background: var(--danger-soft); }
 .route-chip { max-width: 60%; white-space: nowrap; overflow: hidden; }
 .route-chip span { overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 900px) {
   .composer-row .round-send { margin-left: auto; }
-    .growth-pair svg { display: none; }
 }
 
 #wa-card .set-row-label .ch-dot { display: inline-block; vertical-align: 1px; margin-right: 4px; }

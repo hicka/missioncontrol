@@ -1294,7 +1294,8 @@ async function init() {
   if (first) await openThread(first.id);
   // A proposal card needs the proposals read before it can say where one stands.
   renderImprovements().then(() => renderMessages("stay")).catch(() => {});
-  window.MissionDeck?.show("home");
+  // The floating bar sends its "Review in Inbox" here by name.
+  window.MissionDeck?.show(location.hash === "#inbox" ? "inbox" : "home");
   window.dispatchEvent(new Event("mc:ready"));
 }
 init().catch((error) => window.MissionDeck?.notify(`Unable to load workspace: ${error.message}`, true));
@@ -1342,6 +1343,7 @@ async function openSettings(tab) {
   if (tab === "evolution") { window.MissionDeck?.show("evolution"); return; }
   await fetchFull();
   renderLLMPane();
+  MorePanes.desktop();
   renderMemoryPane();
   renderChannelsPane();
   renderGithubPane();

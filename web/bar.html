@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Mission Control Bar</title>
+<link rel="icon" type="image/png" href="/static/logo.png">
+<script>
+  try { const t = localStorage.getItem('mc-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
+</script>
+<link rel="stylesheet" href="/static/ui.css">
+<style>
+  /* The floating bar: what the agent is doing, and the quickest way to talk to it.
+     One row at rest; opened, the work under way and the last reply sit below it. */
+  html, body { height: 100%; overflow: hidden; background: var(--bg-side); }
+  #bar { display: flex; align-items: center; gap: 10px; height: 60px; padding: 0 10px 0 12px; }
+  #bar-orb { flex: none; cursor: grab; display: grid; place-items: center; width: 40px; height: 40px; }
+  #bar-status { flex: 1.7; min-width: 0; text-align: left; display: grid; line-height: 1.25; cursor: pointer; border-radius: 8px; padding: 2px 4px; }
+  #bar-status:hover { background: var(--hover); }
+  #bar-line { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #bar-line.warn { color: var(--warn); }
+  #bar-sub { font-size: 11.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #bar-strip { display: flex; gap: 4px; flex: none; }
+  #bar-ask { flex: 1.2; min-width: 0; display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 5px 0 12px; border-radius: 18px;
+    background: var(--surface); border: 1px solid var(--line-strong); }
+  #bar-ask:focus-within { border-color: color-mix(in srgb, var(--text) 30%, transparent); }
+  #bar-input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font-size: 13.5px; color: var(--text); }
+  #bar-ask .send-btn { width: 26px; height: 26px; }
+  #bar-ask .send-btn .i { width: 14px; height: 14px; }
+  #bar .icon-btn { flex: none; }
+  #bar-more { height: calc(100% - 60px); overflow-y: auto; padding: 0 12px 12px; border-top: 1px solid var(--line); }
+  #bar-more .work-card { max-width: none; }
+  #bar-reply { margin-top: 12px; font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #bar-reply .who { font-size: 11.5px; color: var(--text-3); display: block; margin-bottom: 2px; }
+  #bar-empty { margin-top: 14px; font-size: 12.5px; color: var(--text-3); }
+  body:not(.open) #bar-more { display: none; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5.5M5.5 12 12 5.5l6.5 6.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+  <symbol id="i-window" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M3.5 9h17"/></symbol>
+</defs></svg>
+<div id="bar">
+  <span id="bar-orb" class="pywebview-drag-region" title="Drag to move"></span>
+  <button id="bar-status" aria-expanded="false" aria-controls="bar-more" title="Show the work under way">
+    <span id="bar-line">Connecting…</span><span id="bar-sub"></span>
+  </button>
+  <span id="bar-strip"></span>
+  <form id="bar-ask" autocomplete="off">
+    <input id="bar-input" type="text" placeholder="Ask anything" aria-label="Ask the agent">
+    <button class="send-btn idle" id="bar-send" type="submit" aria-label="Send"><svg class="i"><use href="#i-up"/></svg></button>
+  </form>
+  <button class="icon-btn" id="bar-open" title="Open Mission Control" aria-label="Open Mission Control"><svg class="i"><use href="#i-window"/></svg></button>
+  <button class="icon-btn" id="bar-close" title="Hide the bar" aria-label="Hide the bar"><svg class="i"><use href="#i-x"/></svg></button>
+</div>
+<div id="bar-more" data-work-zone="bar"></div>
+<script src="/static/presence.js"></script>
+<script src="/static/work.js"></script>
+<script src="/static/bar.js"></script>
+</body>
+</html>
